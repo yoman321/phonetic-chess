@@ -1,18 +1,41 @@
 import chess
+from sentence_transformers import SentenceTransformer
 from seed.openings import OPENING_LINES
+
+MODEL_NAME = "all-MiniLM-L6-v2"
 
 
 def is_seeded(driver):
-    """Check if the database already has opening data."""
+    """Check if the database already has opening data with embeddings."""
     with driver.session() as session:
         result = session.run(
             "MATCH (p:Position {is_root: true}) RETURN count(p) AS c"
+        ).single()
+        if result["c"] == 0:
+            return False
+        # Also check that embeddings exist
+        result = session.run(
+            "MATCH ()-[m:MOVE]->() WHERE m.embedding IS NOT NULL RETURN count(m) AS c"
         ).single()
         return result["c"] > 0
 
 
 def seed_database(driver):
-    """Create the opening tree graph in Neo4j."""
+    """Create the opening tree graph in Neo4j with phrase embeddings."""
+    print(f"Loading embedding model ({MODEL_NAME})...")
+    model = SentenceTransformer(MODEL_NAME)
+
+    # Collect all unique phrases to embed in one batch
+    all_phrases = set()
+    for line in OPENING_LINES:
+        for phrase in line["phrases"]:
+            all_phrases.add(phrase)
+    all_phrases = list(all_phrases)
+
+    print(f"Embedding {len(all_phrases)} unique phrases...")
+    embeddings = model.encode(all_phrases)
+    phrase_to_embedding = {p: embeddings[i].tolist() for i, p in enumerate(all_phrases)}
+
     with driver.session() as session:
         session.run("MATCH (n) DETACH DELETE n")
 
@@ -30,6 +53,7 @@ def seed_database(driver):
                 board.push(move)
                 child_fen = board.fen()
                 phrase = line["phrases"][i]
+                embedding = phrase_to_embedding[phrase]
 
                 session.run(
                     """
@@ -38,7 +62,8 @@ def seed_database(driver):
                     MERGE (parent)-[m:MOVE {uci: $uci}]->(child)
                     SET m.phrase = $phrase,
                         m.san = $san,
-                        m.opening = $opening
+                        m.opening = $opening,
+                        m.embedding = $embedding
                     """,
                     parent_fen=parent_fen,
                     child_fen=child_fen,
@@ -46,6 +71,7 @@ def seed_database(driver):
                     san=san,
                     phrase=phrase,
                     opening=line["name"],
+                    embedding=embedding,
                 )
 
         result = session.run(
