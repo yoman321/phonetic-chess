@@ -1,0 +1,19 @@
+.board-pane {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.board-wrap {
+  width: min(78vh, calc(100vw - 480px));
+  aspect-ratio: 1 / 1;
+}
+
+.turn {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}

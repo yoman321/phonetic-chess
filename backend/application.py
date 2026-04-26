@@ -104,6 +104,8 @@ def main():
             board.push(move)
             print(f"  Matched: \"{match['phrase']}\" (similarity: {score:.2f})")
             print(f"  → {match['san']}  [{match['opening']}]")
+            print()
+            print(board.unicode(borders=True, empty_square=" "))
         else:
             print(f"  No close match found (best similarity: {score:.2f}). Try something else.")
         print()
