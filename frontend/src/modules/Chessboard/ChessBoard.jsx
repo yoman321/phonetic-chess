@@ -7,6 +7,7 @@ export default function ChessBoard({
   squareStyles,
   onPieceDrop,
   onSquareClick,
+  orientation = "white",
 }) {
   return (
     <section className="board-pane">
@@ -18,6 +19,7 @@ export default function ChessBoard({
             onPieceDrop,
             onSquareClick,
             squareStyles,
+            boardOrientation: orientation,
           }}
         />
       </div>

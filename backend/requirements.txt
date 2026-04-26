@@ -1,0 +1,9 @@
+python-chess
+numpy
+python-dotenv
+neo4j
+sentence-transformers
+flask
+flask-cors
+flask-socketio
+psycopg[binary]
