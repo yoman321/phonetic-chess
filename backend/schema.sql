@@ -17,11 +17,11 @@ CREATE TABLE IF NOT EXISTS moves (
     ply             INTEGER     NOT NULL,
     uci             TEXT        NOT NULL,
     san             TEXT        NOT NULL,
-    phrase          TEXT,
-    matched_phrase  TEXT,
-    score           REAL,
+    tone_summary    TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (session_id, ply)
 );
+
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS tone_summary TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_moves_session_id ON moves(session_id);

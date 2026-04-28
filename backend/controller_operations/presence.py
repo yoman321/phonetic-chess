@@ -1,0 +1,69 @@
+import os
+import threading
+
+from queries import sessions as sessions_q
+
+IDLE_TTL_SECONDS = int(os.environ.get("IDLE_TTL_SECONDS", "600"))  # default 10 min
+
+_presence_lock = threading.Lock()
+_active_sids = {}      # session_id -> set of socketio sids in the room
+_cleanup_timers = {}   # session_id -> threading.Timer
+_pg = None
+
+
+def init(pg):
+    global _pg
+    _pg = pg
+
+
+def _delete_session(sid):
+    with _presence_lock:
+        _cleanup_timers.pop(sid, None)
+        if _active_sids.get(sid):
+            return  # someone reconnected just before deletion fired
+    with _pg.cursor() as cur:
+        sessions_q.delete_session(cur, sid)
+    print(f"[cleanup] deleted idle session {sid}")
+
+
+def schedule_cleanup(sid):
+    with _presence_lock:
+        existing = _cleanup_timers.pop(sid, None)
+        if existing:
+            existing.cancel()
+        timer = threading.Timer(IDLE_TTL_SECONDS, _delete_session, args=(sid,))
+        timer.daemon = True
+        _cleanup_timers[sid] = timer
+        timer.start()
+
+
+def cancel_cleanup(sid):
+    with _presence_lock:
+        existing = _cleanup_timers.pop(sid, None)
+    if existing:
+        existing.cancel()
+
+
+def reschedule_existing_sessions():
+    with _pg.cursor() as cur:
+        ids = sessions_q.select_all_session_ids(cur)
+    for sid in ids:
+        schedule_cleanup(sid)
+
+
+def track_join(sid, socket_sid):
+    with _presence_lock:
+        _active_sids.setdefault(sid, set()).add(socket_sid)
+
+
+def remove_socket(socket_sid):
+    """Drop a socket from all rooms; return list of sessions that became empty."""
+    now_empty = []
+    with _presence_lock:
+        for sid, members in list(_active_sids.items()):
+            if socket_sid in members:
+                members.discard(socket_sid)
+                if not members:
+                    _active_sids.pop(sid, None)
+                    now_empty.append(sid)
+    return now_empty
