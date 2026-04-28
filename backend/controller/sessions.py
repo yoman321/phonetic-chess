@@ -17,6 +17,7 @@ from controller_operations.helpers import (
 )
 from controller_operations.llm import pick_move_with_llm
 from controller_operations.presence import schedule_cleanup
+from error_logger import logger
 from queries import moves as moves_q
 from queries import sessions as sessions_q
 
@@ -33,6 +34,7 @@ def make_sessions_bp(pg, socketio):
         elif requested in ("white", "black"):
             color = requested
         else:
+            logger.error("create_session: bad_color requested=%r", requested)
             return jsonify({"error": "bad_color"}), 400
 
         token = new_player_token()
@@ -46,6 +48,7 @@ def make_sessions_bp(pg, socketio):
                 return jsonify({**row, "color": color, "playerToken": token}), 201
             except psycopg.errors.UniqueViolation:
                 continue
+        logger.error("create_session: could_not_allocate_session_id after 5 attempts")
         return jsonify({"error": "could_not_allocate_session_id"}), 500
 
     @bp.get("/sessions/<sid>")
@@ -53,6 +56,7 @@ def make_sessions_bp(pg, socketio):
         with pg.cursor() as cur:
             row = sessions_q.select_session_summary(cur, sid)
         if not row:
+            logger.error("get_session: not_found sid=%s", sid)
             return jsonify({"error": "not_found"}), 404
         return jsonify(row)
 
@@ -64,6 +68,7 @@ def make_sessions_bp(pg, socketio):
         with pg.transaction(), pg.cursor() as cur:
             row = sessions_q.select_tokens_for_update(cur, sid)
             if not row:
+                logger.error("join_session: not_found sid=%s", sid)
                 return jsonify({"error": "not_found"}), 404
 
             if existing:
@@ -80,6 +85,7 @@ def make_sessions_bp(pg, socketio):
                 sessions_q.set_black_token(cur, sid, token)
                 return jsonify({"color": "black", "playerToken": token})
 
+            logger.error("join_session: session_full sid=%s", sid)
             return jsonify({"error": "session_full"}), 409
 
     @bp.post("/sessions/<sid>/move")
@@ -88,20 +94,25 @@ def make_sessions_bp(pg, socketio):
         uci = (data.get("uci") or "").strip()
         token = data.get("playerToken")
         if not uci:
+            logger.error("make_move: missing_uci sid=%s", sid)
             return jsonify({"error": "missing_uci"}), 400
         if not token:
+            logger.error("make_move: missing_token sid=%s", sid)
             return jsonify({"error": "missing_token"}), 401
 
         try:
             move = chess.Move.from_uci(uci)
         except Exception:
+            logger.exception("make_move: bad_uci sid=%s uci=%r", sid, uci)
             return jsonify({"error": "bad_uci"}), 400
 
         with pg.transaction(), pg.cursor() as cur:
             row = sessions_q.select_state_for_update(cur, sid)
             if not row:
+                logger.error("make_move: not_found sid=%s", sid)
                 return jsonify({"error": "not_found"}), 404
             if row["status"] != "active":
+                logger.error("make_move: game_over sid=%s status=%s", sid, row["status"])
                 return jsonify({"error": "game_over", "status": row["status"]}), 409
 
             if token == row["white_token"]:
@@ -109,12 +120,18 @@ def make_sessions_bp(pg, socketio):
             elif token == row["black_token"]:
                 my_color = chess.BLACK
             else:
+                logger.error("make_move: not_a_player sid=%s", sid)
                 return jsonify({"error": "not_a_player"}), 403
 
             board = chess.Board(row["fen"])
             if my_color != board.turn:
+                logger.error("make_move: not_your_turn sid=%s", sid)
                 return jsonify({"error": "not_your_turn"}), 403
             if move not in board.legal_moves:
+                logger.error(
+                    "make_move: illegal_move sid=%s uci=%s fen=%s",
+                    sid, uci, row["fen"],
+                )
                 return jsonify({"error": "illegal_move", "fen": row["fen"]}), 400
 
             san = board.san(move)
@@ -144,15 +161,19 @@ def make_sessions_bp(pg, socketio):
         text = (data.get("text") or "").strip()
         token = data.get("playerToken")
         if not text:
+            logger.error("say_move: missing_text sid=%s", sid)
             return jsonify({"error": "missing_text"}), 400
         if not token:
+            logger.error("say_move: missing_token sid=%s", sid)
             return jsonify({"error": "missing_token"}), 401
 
         with pg.transaction(), pg.cursor() as cur:
             row = sessions_q.select_state_for_update(cur, sid)
             if not row:
+                logger.error("say_move: not_found sid=%s", sid)
                 return jsonify({"error": "not_found"}), 404
             if row["status"] != "active":
+                logger.error("say_move: game_over sid=%s status=%s", sid, row["status"])
                 return jsonify({"error": "game_over", "status": row["status"]}), 409
 
             if token == row["white_token"]:
@@ -160,6 +181,7 @@ def make_sessions_bp(pg, socketio):
             elif token == row["black_token"]:
                 my_color = chess.BLACK
             else:
+                logger.error("say_move: not_a_player sid=%s", sid)
                 return jsonify({"error": "not_a_player"}), 403
 
             prior_row = moves_q.select_last_move(cur, sid)
@@ -167,18 +189,24 @@ def make_sessions_bp(pg, socketio):
             if prior_row is None:
                 # Game just started — only white can make the first move.
                 if my_color != chess.WHITE:
+                    logger.error(
+                        "say_move: waiting_for_opponent_move sid=%s (no prior moves)", sid,
+                    )
                     return jsonify({"error": "waiting_for_opponent_move"}), 409
             else:
                 last_mover = chess.WHITE if prior_row["ply"] % 2 == 1 else chess.BLACK
                 if last_mover == my_color:
+                    logger.error("say_move: waiting_for_opponent_move sid=%s", sid)
                     return jsonify({"error": "waiting_for_opponent_move"}), 409
 
             board = chess.Board(row["fen"])
             if my_color != board.turn:
+                logger.error("say_move: not_your_turn sid=%s", sid)
                 return jsonify({"error": "not_your_turn"}), 403
 
             candidates = rank_moves(board)
             if not candidates:
+                logger.error("say_move: no_legal_moves sid=%s fen=%s", sid, row["fen"])
                 return jsonify({"error": "no_legal_moves"}), 409
             all_legal_ucis = {m.uci() for m in board.legal_moves}
 
@@ -195,8 +223,10 @@ def make_sessions_bp(pg, socketio):
                     valid_ucis=all_legal_ucis,
                 )
             except (urllib.error.URLError, TimeoutError) as e:
+                logger.exception("say_move: llm_unavailable sid=%s", sid)
                 return jsonify({"error": "llm_unavailable", "detail": str(e)}), 502
             except (ValueError, json.JSONDecodeError, KeyError) as e:
+                logger.exception("say_move: llm_bad_response sid=%s", sid)
                 return jsonify({"error": "llm_bad_response", "detail": str(e)}), 502
 
             move = chess.Move.from_uci(chosen_uci)

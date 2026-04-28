@@ -1,6 +1,7 @@
 import os
 import threading
 
+from error_logger import logger
 from queries import sessions as sessions_q
 
 IDLE_TTL_SECONDS = int(os.environ.get("IDLE_TTL_SECONDS", "600"))  # default 10 min
@@ -23,7 +24,7 @@ def _delete_session(sid):
             return  # someone reconnected just before deletion fired
     with _pg.cursor() as cur:
         sessions_q.delete_session(cur, sid)
-    print(f"[cleanup] deleted idle session {sid}")
+    logger.info("[cleanup] deleted idle session %s", sid)
 
 
 def schedule_cleanup(sid):

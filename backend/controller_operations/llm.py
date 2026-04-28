@@ -3,6 +3,8 @@ import os
 import time
 import urllib.request
 
+from error_logger import logger
+
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
@@ -87,21 +89,22 @@ def pick_move_with_llm(
             tone_summary = (parsed.get("tone_summary") or "").strip()
             if uci not in valid_ucis:
                 raise ValueError(f"llm returned invalid uci: {uci!r}")
-            print(
-                f"[llm] attempt {attempt+1}/{LLM_MAX_RETRIES} ok  uci={uci} "
-                f"off_list={uci not in {u for u, _ in candidates}}"
+            logger.info(
+                "[llm] attempt %d/%d ok  uci=%s off_list=%s",
+                attempt + 1, LLM_MAX_RETRIES, uci,
+                uci not in {u for u, _ in candidates},
             )
             return uci, tone_summary
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             last_err = e
-            print(
-                f"[llm] attempt {attempt+1}/{LLM_MAX_RETRIES} fail "
-                f"{type(e).__name__}: {e}  raw={last_content!r}"
+            logger.info(
+                "[llm] attempt %d/%d fail %s: %s  raw=%r",
+                attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, last_content,
             )
             if attempt + 1 < LLM_MAX_RETRIES:
                 time.sleep(LLM_BACKOFF_BASE * (2 ** attempt))
-    print(
-        f"[llm] giving up after {LLM_MAX_RETRIES} attempts; "
-        f"last_err={type(last_err).__name__}: {last_err}"
+    logger.info(
+        "[llm] giving up after %d attempts; last_err=%s: %s",
+        LLM_MAX_RETRIES, type(last_err).__name__, last_err,
     )
     raise last_err
