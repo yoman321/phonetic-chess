@@ -44,9 +44,15 @@ def pick_move_with_llm(
         "playful. Use the prior tone summary as context — if the game has been calm "
         "and the new message is suddenly aggressive, the shift should show in the "
         "move. After choosing, write a SHORT (one or two sentences) updated tone "
-        "summary that folds the new message into the running narrative. "
+        "summary that folds the new message into the running narrative. Also write "
+        "a one-sentence 'intent' describing what the new message communicates, and "
+        "a one-sentence 'rationale' explaining why the chosen move expresses that "
+        "intent. "
         'Reply ONLY with JSON of the form '
-        '{"uci": "<one of the legal UCIs>", "tone_summary": "<updated summary>"}.'
+        '{"uci": "<one of the legal UCIs>", '
+        '"tone_summary": "<updated rolling summary>", '
+        '"intent": "<one sentence: what the new message communicates>", '
+        '"rationale": "<one sentence: why this move expresses that intent>"}.'
     )
     user = (
         f"Tone of the game so far: {prior_tone_summary or '(none yet)'}\n"
@@ -87,6 +93,8 @@ def pick_move_with_llm(
             parsed = json.loads(content)
             uci = (parsed.get("uci") or "").strip()
             tone_summary = (parsed.get("tone_summary") or "").strip()
+            intent = (parsed.get("intent") or "").strip()
+            rationale = (parsed.get("rationale") or "").strip()
             if uci not in valid_ucis:
                 raise ValueError(f"llm returned invalid uci: {uci!r}")
             logger.info(
@@ -94,7 +102,7 @@ def pick_move_with_llm(
                 attempt + 1, LLM_MAX_RETRIES, uci,
                 uci not in {u for u, _ in candidates},
             )
-            return uci, tone_summary
+            return uci, tone_summary, intent, rationale
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             last_err = e
             logger.info(

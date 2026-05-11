@@ -6,7 +6,7 @@ import chess
 import psycopg
 from flask import Blueprint, jsonify, request
 
-from controller_operations.engine import rank_moves
+from controller_operations.engine import evaluate, rank_moves
 from controller_operations.helpers import (
     START_FEN,
     append_pgn,
@@ -58,6 +58,7 @@ def make_sessions_bp(pg, socketio):
         if not row:
             logger.error("get_session: not_found sid=%s", sid)
             return jsonify({"error": "not_found"}), 404
+        row["evalCp"] = evaluate(chess.Board(row["fen"]))
         return jsonify(row)
 
     @bp.post("/sessions/<sid>/join")
@@ -151,6 +152,7 @@ def make_sessions_bp(pg, socketio):
             "ply": ply,
             "uci": uci,
             "san": san,
+            "evalCp": evaluate(board),
         }
         socketio.emit("move", payload, to=room_name(sid))
         return jsonify(payload)
@@ -217,15 +219,19 @@ def make_sessions_bp(pg, socketio):
                 last_move = None
                 prior_tone = ""
 
+            player_side = "white" if my_color == chess.WHITE else "black"
+            socketio.emit("thinking", {"on": True, "side": player_side}, to=room_name(sid))
             try:
-                chosen_uci, tone_summary = pick_move_with_llm(
+                chosen_uci, tone_summary, intent, rationale = pick_move_with_llm(
                     text, row["fen"], candidates, prior_tone, last_move,
                     valid_ucis=all_legal_ucis,
                 )
             except (urllib.error.URLError, TimeoutError) as e:
+                socketio.emit("thinking", {"on": False, "side": player_side}, to=room_name(sid))
                 logger.exception("say_move: llm_unavailable sid=%s", sid)
                 return jsonify({"error": "llm_unavailable", "detail": str(e)}), 502
             except (ValueError, json.JSONDecodeError, KeyError) as e:
+                socketio.emit("thinking", {"on": False, "side": player_side}, to=room_name(sid))
                 logger.exception("say_move: llm_bad_response sid=%s", sid)
                 return jsonify({"error": "llm_bad_response", "detail": str(e)}), 502
 
@@ -249,6 +255,10 @@ def make_sessions_bp(pg, socketio):
             "san": san,
             "text": text,
             "tone_summary": tone_summary,
+            "intent": intent,
+            "rationale": rationale,
+            "priorTone": prior_tone or "",
+            "evalCp": evaluate(board),
         }
         socketio.emit("move", payload, to=room_name(sid))
         return jsonify(payload)

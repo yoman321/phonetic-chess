@@ -64,6 +64,27 @@ def _to_sunfish_move(side_is_white, uci):
     return sunfish.Move(i, j, prom)
 
 
+def evaluate(board):
+    """Static eval of `board` in centipawns from White's POV (positive = white better).
+
+    Uses Sunfish's piece values + piece-square tables. Returns 0 if the FEN
+    can't be parsed.
+    """
+    try:
+        pos = _fen_to_sunfish_pos(board.fen())
+    except Exception:
+        return 0
+    score = 0
+    for i, p in enumerate(pos.board):
+        if p.isupper():
+            score += sunfish.pst[p][i]
+        elif p.islower():
+            score -= sunfish.pst[p.upper()][119 - i]
+    if board.turn == chess.BLACK:
+        score = -score
+    return int(score)
+
+
 def rank_moves(board, top_n=ENGINE_TOPN_DEFAULT):
     """Return up to top_n (uci, san) pairs ordered best-first.
 
