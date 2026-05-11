@@ -3,8 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Chess } from "chess.js";
 import ChessBoard from "../Chessboard/ChessBoard";
 import Chatbox from "../Chatbox/Chatbox";
+import EvalBar from "../EvalBar/EvalBar";
 import FatalError from "../FatalError/FatalError";
-import { getSession, joinSession, postMove } from "../../api";
+import { getSession, joinSession, postMove, postSay } from "../../api";
 import { getStoredToken, setStoredToken } from "../../storage";
 import { getSocket } from "../../socket";
 import "./GameView.css";
@@ -23,6 +24,10 @@ export default function GameView() {
   const [draft, setDraft] = useState("");
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [legalTargets, setLegalTargets] = useState([]);
+  const [evalCp, setEvalCp] = useState(0);
+  const [thinkingSide, setThinkingSide] = useState(null);
+  const [thinkingStatus, setThinkingStatus] = useState("thinking");
+  const [subscriptError, setSubscriptError] = useState(null);
 
   const myTurn = color && game.turn() === color[0];
 
@@ -39,6 +44,7 @@ export default function GameView() {
         }
         game.load(s.fen);
         setPosition(game.fen());
+        if (typeof s.evalCp === "number") setEvalCp(s.evalCp);
 
         const join = await joinSession(sessionId, getStoredToken(sessionId));
         if (cancelled) return;
@@ -47,16 +53,15 @@ export default function GameView() {
         setPlayerToken(join.playerToken);
         setColor(join.color);
 
-        setMessages([
-          {
-            from: "system",
-            text: `You are ${join.color}. ${
-              s.status === "active"
-                ? "Waiting for your turn."
-                : `Game ${s.status.replace("_", " ")}.`
-            }`,
-          },
-        ]);
+        let introText;
+        if (s.status !== "active") {
+          introText = `You're ${join.color}. Game ${s.status.replace("_", " ")}.`;
+        } else if (join.color === "white") {
+          introText = `You're ${join.color}. Play your first move.`;
+        } else {
+          introText = `You're ${join.color}. Waiting for white's first move.`;
+        }
+        setMessages([{ from: "system", intro: true, text: introText }]);
         setValidating(false);
       } catch (e) {
         if (!cancelled) {
@@ -81,16 +86,57 @@ export default function GameView() {
     socket.connect();
     socket.emit("join_session", { sessionId });
 
-    const onMove = ({ fen, san }) => {
-      if (game.fen() === fen) return;
-      game.load(fen);
-      setPosition(fen);
-      setMessages((m) => [...m, { from: "system", text: `Opponent → ${san}` }]);
+    const onMove = ({
+      fen,
+      san,
+      text,
+      ply,
+      evalCp: cp,
+      intent,
+      rationale,
+      priorTone,
+    }) => {
+      setThinkingSide(null);
+      setThinkingStatus("thinking");
+      if (typeof cp === "number") setEvalCp(cp);
+      if (game.fen() !== fen) {
+        game.load(fen);
+        setPosition(fen);
+      }
+      const mover = ply % 2 === 1 ? "white" : "black";
+      setMessages((m) => {
+        const next = m.filter((msg) => !msg.intro);
+        if (text && mover !== color) {
+          next.push({ from: mover, text });
+        }
+        if (text) {
+          const explanation =
+            intent || rationale || priorTone
+              ? { priorTone: priorTone || "", intent: intent || "", rationale: rationale || "" }
+              : undefined;
+          next.push({
+            from: "system",
+            side: mover,
+            text: `Move: ${san}`,
+            explanation,
+          });
+        } else if (mover !== color) {
+          next.push({ from: "system", side: mover, text: `Opponent → ${san}` });
+        }
+        return next;
+      });
     };
     socket.on("move", onMove);
 
+    const onThinking = ({ on, side, status }) => {
+      setThinkingSide(on ? side : null);
+      setThinkingStatus(status || "thinking");
+    };
+    socket.on("thinking", onThinking);
+
     return () => {
       socket.off("move", onMove);
+      socket.off("thinking", onThinking);
       socket.disconnect();
     };
   }, [sessionId, color, game]);
@@ -114,8 +160,27 @@ export default function GameView() {
     const text = draft.trim();
     if (!text) return;
 
-    setMessages((m) => [...m, { from: "user", text }]);
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setMessages((m) => [...m, { from: color, text, pendingId }]);
     setDraft("");
+    setSubscriptError(null);
+
+    postSay(sessionId, text, playerToken).catch((err) => {
+      if (err.message === "llm_bad_response") {
+        setMessages((m) => m.filter((msg) => msg.pendingId !== pendingId));
+        setDraft(text);
+        setThinkingSide(null);
+        setThinkingStatus("thinking");
+        setSubscriptError(
+          "llm couldn't understand the message, please retry",
+        );
+        return;
+      }
+      setMessages((m) => [
+        ...m,
+        { from: "system", text: `Phrase rejected: ${err.message}` },
+      ]);
+    });
   };
 
   const tryMove = (from, to) => {
@@ -230,6 +295,7 @@ export default function GameView() {
             onPieceDrop={handlePieceDrop}
             onSquareClick={handleSquareClick}
             orientation={color}
+            leftRail={<EvalBar evalCp={evalCp} orientation={color} />}
           />
         )}
         <Chatbox
@@ -237,6 +303,11 @@ export default function GameView() {
           draft={draft}
           setDraft={setDraft}
           onSend={handleSend}
+          disabled={!myTurn || !!thinkingSide}
+          thinkingSide={thinkingSide}
+          thinkingStatus={thinkingStatus}
+          subscriptError={subscriptError}
+          myColor={color}
         />
       </main>
     </div>

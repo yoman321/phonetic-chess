@@ -8,20 +8,24 @@ export default function ChessBoard({
   onPieceDrop,
   onSquareClick,
   orientation = "white",
+  leftRail = null,
 }) {
   return (
     <section className="board-pane">
-      <div className="board-wrap">
-        <ReactChessboard
-          options={{
-            position,
-            allowDragging: true,
-            onPieceDrop,
-            onSquareClick,
-            squareStyles,
-            boardOrientation: orientation,
-          }}
-        />
+      <div className="board-row">
+        {leftRail}
+        <div className="board-wrap">
+          <ReactChessboard
+            options={{
+              position,
+              allowDragging: true,
+              onPieceDrop,
+              onSquareClick,
+              squareStyles,
+              boardOrientation: orientation,
+            }}
+          />
+        </div>
       </div>
       <p className="turn">{turnLabel} to move</p>
     </section>

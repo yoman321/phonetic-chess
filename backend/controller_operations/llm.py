@@ -8,12 +8,13 @@ from error_logger import logger
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
-LLM_MAX_RETRIES = min(int(os.environ.get("LLM_MAX_RETRIES", "5")), 5)
+LLM_MAX_RETRIES = min(int(os.environ.get("LLM_MAX_RETRIES", "3")), 3)
 LLM_BACKOFF_BASE = float(os.environ.get("LLM_BACKOFF_BASE", "0.5"))
 
 
 def pick_move_with_llm(
-    text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None
+    text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None,
+    on_retry=None,
 ):
     """Ask the local Llama model to pick a UCI and emit an updated tone summary.
 
@@ -110,6 +111,11 @@ def pick_move_with_llm(
                 attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, last_content,
             )
             if attempt + 1 < LLM_MAX_RETRIES:
+                if on_retry is not None:
+                    try:
+                        on_retry(attempt + 1)
+                    except Exception:
+                        logger.exception("[llm] on_retry callback raised")
                 time.sleep(LLM_BACKOFF_BASE * (2 ** attempt))
     logger.info(
         "[llm] giving up after %d attempts; last_err=%s: %s",

@@ -220,11 +220,29 @@ def make_sessions_bp(pg, socketio):
                 prior_tone = ""
 
             player_side = "white" if my_color == chess.WHITE else "black"
-            socketio.emit("thinking", {"on": True, "side": player_side}, to=room_name(sid))
+            socketio.emit(
+                "thinking",
+                {"on": True, "side": player_side, "status": "thinking"},
+                to=room_name(sid),
+            )
+
+            def _on_llm_retry(attempt):
+                socketio.emit(
+                    "thinking",
+                    {
+                        "on": True,
+                        "side": player_side,
+                        "status": "retrying",
+                        "attempt": attempt,
+                    },
+                    to=room_name(sid),
+                )
+
             try:
                 chosen_uci, tone_summary, intent, rationale = pick_move_with_llm(
                     text, row["fen"], candidates, prior_tone, last_move,
                     valid_ucis=all_legal_ucis,
+                    on_retry=_on_llm_retry,
                 )
             except (urllib.error.URLError, TimeoutError) as e:
                 socketio.emit("thinking", {"on": False, "side": player_side}, to=room_name(sid))

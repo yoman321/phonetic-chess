@@ -7,6 +7,13 @@
   gap: 12px;
 }
 
+.board-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 8px;
+}
+
 .board-wrap {
   width: min(78vh, calc(100vw - 480px));
   aspect-ratio: 1 / 1;

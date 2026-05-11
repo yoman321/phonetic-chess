@@ -48,3 +48,19 @@ export async function postMove(sessionId, uci, playerToken) {
   }
   return res.json();
 }
+
+export async function postSay(sessionId, text, playerToken) {
+  const res = await fetch(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/say`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, playerToken }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `postSay failed: ${res.status}`);
+  }
+  return res.json();
+}
