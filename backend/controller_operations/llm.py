@@ -1,22 +1,37 @@
 import json
 import os
 import time
-import urllib.request
+
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from error_logger import logger
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+# Groq exposes an OpenAI-compatible API at this base URL, so the openai SDK
+# works against it unchanged — only api_key and base_url differ.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
 LLM_MAX_RETRIES = min(int(os.environ.get("LLM_MAX_RETRIES", "3")), 3)
 LLM_BACKOFF_BASE = float(os.environ.get("LLM_BACKOFF_BASE", "0.5"))
+
+# max_retries=3: SDK retries 429s, connection errors, and timeouts with
+# exponential backoff (honoring Retry-After when present). After 3 failed
+# attempts the original error is raised, which the except blocks below
+# convert into TimeoutError so the caller surfaces llm_unavailable.
+_client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url=GROQ_BASE_URL,
+    timeout=LLM_TIMEOUT,
+    max_retries=3,
+)
 
 
 def pick_move_with_llm(
     text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None,
     on_retry=None,
 ):
-    """Ask the local Llama model to pick a UCI and emit an updated tone summary.
+    """Ask Groq to pick a UCI and emit an updated tone summary.
 
     candidates: list of (uci, san) pairs shown to the LLM as suggested moves
         (typically Sunfish's top-N). Advisory only.
@@ -25,8 +40,8 @@ def pick_move_with_llm(
         moves) to make the candidate list advisory rather than binding.
     prior_tone_summary: rolling summary of the game's tone so far (may be "").
     last_move: (uci, san) of the most recent move played, or None.
-    Returns (uci, tone_summary). Retries on bad JSON or out-of-set UCI up to
-    LLM_MAX_RETRIES times before raising the last error.
+    Returns (uci, tone_summary, intent, rationale). Retries on bad JSON or
+    out-of-set UCI up to LLM_MAX_RETRIES times before raising the last error.
     """
     moves_listing = "\n".join(f"- {uci} ({san})" for uci, san in candidates)
     if valid_ucis is None:
@@ -67,29 +82,20 @@ def pick_move_with_llm(
         "message and the opponent's last move shift the game's mood."
     )
 
-    body = json.dumps({
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "format": "json",
-        "stream": False,
-        "options": {"temperature": 0.7},
-    }).encode()
-
     last_err = None
     last_content = None
     for attempt in range(LLM_MAX_RETRIES):
         try:
-            req = urllib.request.Request(
-                f"{OLLAMA_URL}/api/chat",
-                data=body,
-                headers={"Content-Type": "application/json"},
+            resp = _client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.7,
             )
-            with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as resp:
-                reply = json.loads(resp.read())
-            content = reply["message"]["content"]
+            content = resp.choices[0].message.content
             last_content = content
             parsed = json.loads(content)
             uci = (parsed.get("uci") or "").strip()
@@ -104,6 +110,11 @@ def pick_move_with_llm(
                 uci not in {u for u, _ in candidates},
             )
             return uci, tone_summary, intent, rationale
+        except (APIConnectionError, APITimeoutError, RateLimitError) as e:
+            # SDK already retried 3 times — surface as TimeoutError so the
+            # caller's (URLError, TimeoutError) handler maps it to the
+            # llm_unavailable ApiError the frontend knows how to display.
+            raise TimeoutError(str(e)) from e
         except (ValueError, json.JSONDecodeError, KeyError) as e:
             last_err = e
             logger.info(
