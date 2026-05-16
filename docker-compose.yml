@@ -1,0 +1,60 @@
+# Compose orchestrates the three containers: postgres, backend, frontend.
+# Run: `docker compose up --build` from this directory.
+# Then open http://localhost:8080
+#
+# The backend calls Groq for LLM moves (see controller_operations/llm.py).
+# Set GROQ_API_KEY in backend/.env — it gets injected into the container
+# at runtime via env_file.
+
+services:
+  db:
+    # Custom image that bakes schema.sql into /docker-entrypoint-initdb.d
+    # at build time, so we don't need a host bind mount for it.
+    build:
+      context: ./backend
+      dockerfile: db.Dockerfile
+    environment:
+      POSTGRES_USER: phonetic
+      POSTGRES_PASSWORD: phonetic
+      POSTGRES_DB: phonetic_chess
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phonetic -d phonetic_chess"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    # env_file: Docker reads this file on the host at container start and
+    # injects each KEY=VALUE as an environment variable. The file itself
+    # never enters the container or the image.
+    env_file:
+      - ./backend/.env
+    # `environment:` overrides anything also set in env_file — we use it
+    # to force DATABASE_URL to point at the `db` service instead of the
+    # host-localhost value in backend/.env.
+    environment:
+      DATABASE_URL: postgresql://phonetic:phonetic@db:5432/phonetic_chess
+    depends_on:
+      db:
+        condition: service_healthy
+    # No host port published — only nginx talks to the backend internally.
+    expose:
+      - "5001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Same-origin paths via the nginx reverse proxy below.
+        VITE_API_BASE: /api
+        VITE_SOCKET_URL: ""
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  db_data:

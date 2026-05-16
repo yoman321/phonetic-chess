@@ -176,6 +176,16 @@ export default function GameView() {
         );
         return;
       }
+      if (err.message === "llm_unavailable") {
+        setMessages((m) => m.filter((msg) => msg.pendingId !== pendingId));
+        setDraft(text);
+        setThinkingSide(null);
+        setThinkingStatus("thinking");
+        setSubscriptError(
+          "Groq is unavailable right now, please try again in a moment",
+        );
+        return;
+      }
       setMessages((m) => [
         ...m,
         { from: "system", text: `Phrase rejected: ${err.message}` },
