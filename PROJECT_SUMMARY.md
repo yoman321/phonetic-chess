@@ -133,6 +133,42 @@ After any move, the server broadcasts a `move` socket event to room `session:<si
 
 Picks up **after** the EC2 instance has been launched. Target setup: single `t4g.small` (ARM, Amazon Linux 2023, 20 GB gp3, delete-on-termination), Elastic IP, custom domain, HTTPS via Caddy auto-cert, ~$14/mo + ~$10/yr domain + capped Groq spend.
 
+## Deployment Progress & Live Status (2026-05-23)
+
+**Current state: app is running on EC2, reachable directly via the Elastic IP over plain HTTP — no domain / HTTPS yet.**
+
+- Instance: `t4g.small`, Amazon Linux 2023 (host `ip-172-31-85-22`), ARM (`aarch64`).
+- All three containers build and the stack runs: `db` (healthy), `backend` (gunicorn on internal `5001`), `frontend` (nginx, published `0.0.0.0:8080->80`).
+- Access pattern for this phase: **`http://<elastic-ip>:8080`** (plain HTTP, port 8080). Same-origin `/api` + `/socket.io` proxying through the frontend nginx works as-is, so no code changes were needed for IP-based access.
+- The guide's "bind frontend to `127.0.0.1:8080:80`" edit was **intentionally NOT applied** — that's only for when Caddy fronts the app. Kept `8080:80` (public) so the Elastic IP is directly reachable.
+- **Required AWS step for reachability:** open inbound **TCP 8080** in the instance's Security Group (Source = My IP while testing). By default only SSH/22 is open.
+
+### Gotchas hit during first deploy (and fixes)
+
+1. **Backend container kept exiting — `ModuleNotFoundError: No module named 'openai'`.** `controller_operations/llm.py` imports the OpenAI SDK (used for Groq), but `openai` was missing from `backend/requirements.txt` (the Dockerfile installs only that file + gunicorn/gevent). **Fix:** added `openai>=1.30,<2` to `requirements.txt` (verified locally end-to-end, then committed + pushed). The `<2` pin guards the 1.x import style (`OpenAI` client + `APIConnectionError`/`APITimeoutError`/`RateLimitError`). Watch for other dev-only deps that may have similarly drifted out of `requirements.txt`.
+2. **`compose build requires buildx 0.17.0 or later`.** The setup installed the `docker-compose` plugin but not `buildx`. **Fix:** installed the latest `docker-buildx` plugin into `/usr/libexec/docker/cli-plugins` (use the `linux-arm64` asset for `t4g`). Fallback: `DOCKER_BUILDKIT=0 docker compose ...` to use the legacy builder.
+3. **`permission denied ... /var/run/docker.sock`.** `ec2-user` not in the `docker` group, and the existing `tmux` session predated the group change. **Fix:** `sudo usermod -aG docker ec2-user` then `newgrp docker` (immediate, in-shell) or full SSH logout/login (permanent). A pre-existing tmux server keeps the stale group until killed/recreated.
+4. **`pip` "running as the 'root' user" warning during build** — harmless inside a container (the image *is* the isolated env); not an error.
+5. **`curl https://127.0.0.1:8080` → `SSL routines::wrong version number`** — used HTTPS against a plaintext HTTP port. For this phase everything is `http://...:8080`; HTTPS only exists once Caddy is in front.
+
+### Verified working
+
+- `docker compose ps` → all three `Up`, `db` healthy.
+- `curl -I http://127.0.0.1:8080` → `200`.
+- `curl -X POST http://127.0.0.1:8080/api/sessions -d '{}'` → valid session JSON (confirms frontend nginx → backend → db chain).
+- Local laptop run of the same images passed identically before the push.
+- *Still to confirm in-browser:* live Groq `/say` round-trip and two-tab WebSocket/typing-dots over the Elastic IP.
+
+## ▶ Next Step — serve from a real web address (domain + HTTPS) instead of the bare Elastic IP
+
+Right now users would have to type `http://<elastic-ip>:8080`. The next milestone is a proper, memorable address served over HTTPS:
+
+1. **Buy + point a domain** at the Elastic IP (Step 2 below): A records for `apex` and `www`. Verify with `dig <domain> +short`.
+2. **Apply the localhost-only frontend binding** in `docker-compose.yml` (`127.0.0.1:8080:80`) so the app is reachable only via the reverse proxy, then `docker compose up -d`.
+3. **Install + configure Caddy** (Steps 4 & 6 below): a two-line Caddyfile reverse-proxying `127.0.0.1:8080`. Caddy auto-fetches a Let's Encrypt cert, redirects HTTP→HTTPS, and transparently upgrades WebSockets.
+4. **Lock down the Security Group:** once Caddy is the public face, allow inbound **80 + 443** and remove the temporary **8080** rule.
+5. Result: `https://yourdomain.com` with a green padlock — see Steps 1–7 of the guide below for the full walkthrough.
+
 ## Codebase Readiness Check
 
 The app is **deployment-ready as-is** — no code changes required to work behind HTTPS + reverse proxy:
