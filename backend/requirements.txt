@@ -9,6 +9,7 @@ h11==0.16.0
 itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.3
+openai>=1.30,<2
 psycopg==3.3.3
 psycopg-binary==3.3.3
 python-chess==1.999
