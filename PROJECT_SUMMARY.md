@@ -126,3 +126,224 @@ After any move, the server broadcasts a `move` socket event to room `session:<si
 - Frontend wiring for sockets / API / state: `frontend/src/modules/GameView/GameView.jsx`.
 - Schema / queries: `backend/schema.sql` + `backend/queries/`.
 - Deployment / env: `docker-compose.yml` + `backend/Dockerfile` + `frontend/Dockerfile` + `frontend/nginx.conf`.
+
+---
+
+# Deployment Guide (EC2 + Caddy)
+
+Picks up **after** the EC2 instance has been launched. Target setup: single `t4g.small` (ARM, Amazon Linux 2023, 20 GB gp3, delete-on-termination), Elastic IP, custom domain, HTTPS via Caddy auto-cert, ~$14/mo + ~$10/yr domain + capped Groq spend.
+
+## Codebase Readiness Check
+
+The app is **deployment-ready as-is** — no code changes required to work behind HTTPS + reverse proxy:
+
+- Frontend uses same-origin paths in production: `docker-compose.yml` passes `VITE_API_BASE=/api` and `VITE_SOCKET_URL=""` as build args; `frontend/Dockerfile:12-15` bakes them into the Vite bundle.
+- `frontend/nginx.conf` already proxies `/api/` (REST) and `/socket.io/` (with proper `Upgrade`/`Connection` headers for WebSocket).
+- Backend gunicorn binds `0.0.0.0:5001` with `GeventWebSocketWorker` (real WS upgrade, not polling fallback).
+- CORS is wide-open (`CORS(app)` + `cors_allowed_origins="*"`) — fine because all browser traffic is same-origin through the proxy chain. Tighten later if desired.
+
+The only **required edits before `docker compose up`** are:
+1. Create `backend/.env` from `backend/.env.example` and paste the real `GROQ_API_KEY` (compose fails without this file).
+2. In `docker-compose.yml`, bind the frontend to localhost only so Caddy is the public face:
+   ```yaml
+   frontend:
+     ports:
+       - "127.0.0.1:8080:80"
+   ```
+
+## Step 1 — Elastic IP (AWS Console)
+
+EC2 → **Elastic IPs** → **Allocate Elastic IP address** → defaults are fine → **Associate** to the instance. Tag with `Name: phonetic-chess-eip`.
+
+**Cost note:** EIP is free *only while attached to a running instance*. Stopped instance or unattached EIP = $3.60/mo. On project decommission, **release** the EIP.
+
+## Step 2 — Domain + DNS (~$10/yr at registrar)
+
+Buy domain at Cloudflare/Namecheap/Route 53. Add two A records:
+- `phoneticchess.com` → `<elastic-ip>`
+- `www.phoneticchess.com` → `<elastic-ip>`
+
+Verify propagation before step 6: `dig phoneticchess.com +short` should return the EIP.
+
+## Step 3 — SSH into the instance
+
+Key already downloaded as `~/.ssh/phonetic-chess.pem` (Ed25519 supported on Amazon Linux 2023; not on Windows AMIs).
+
+```bash
+chmod 600 ~/.ssh/phonetic-chess.pem
+ssh -i ~/.ssh/phonetic-chess.pem ec2-user@<elastic-ip>
+```
+
+Add to `~/.ssh/config` for shortcut + VS Code Remote-SSH:
+```
+Host phonetic-ec2
+    HostName <elastic-ip>
+    User ec2-user
+    IdentityFile ~/.ssh/phonetic-chess.pem
+```
+
+**Working from EC2 itself:** Claude Code *can* be installed on EC2 (`npm i -g @anthropic-ai/claude-code`, device-code auth works over SSH) but 2 GB RAM is tight alongside Docker. **Recommended:** VS Code Remote-SSH extension on laptop — Claude Code in VS Code's terminal sees EC2 files as local. Fallback: two terminals (Claude locally, SSH session for paste targets).
+
+Always start a `tmux` session before long commands: `tmux new -s deploy` so flaky SSH doesn't kill `docker compose build`.
+
+## Step 4 — Install Docker + Caddy on EC2
+
+```bash
+# Docker
+sudo dnf install -y docker git
+sudo systemctl enable --now docker
+sudo usermod -aG docker ec2-user
+sudo mkdir -p /usr/libexec/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 \
+  -o /usr/libexec/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+# Caddy (reverse proxy + auto-HTTPS via Let's Encrypt)
+sudo dnf install -y 'dnf-command(copr)'
+sudo dnf copr enable -y @caddy/caddy
+sudo dnf install -y caddy
+
+# Log out + back in for docker group membership to apply
+exit
+```
+
+## Step 5 — Clone, configure, build
+
+```bash
+ssh phonetic-ec2
+git clone <repo-url> phonetic_chess && cd phonetic_chess
+
+# Create backend/.env with real key
+cp backend/.env.example backend/.env
+nano backend/.env   # set GROQ_API_KEY=gsk_...
+
+# Edit docker-compose.yml frontend port binding (see Codebase Readiness Check above)
+nano docker-compose.yml
+
+# Build + start
+docker compose up -d --build
+curl -I http://127.0.0.1:8080   # should return 200 OK
+```
+
+**Memory warning:** `npm run build` (Vite) peaks at ~1.5 GB. Fine on t4g.small (2 GB), tight on t4g.micro (1 GB). On 1 GB, either add swap (`fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`, then persist via `/etc/fstab`) or pre-build the image on laptop and push to ECR/Docker Hub.
+
+## Step 6 — Caddy config (auto-HTTPS)
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+Replace contents with:
+```
+phoneticchess.com, www.phoneticchess.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+That's the entire config. Caddy auto-fetches Let's Encrypt cert for both names, renews forever, redirects HTTP → HTTPS, upgrades WebSockets transparently (Socket.IO Just Works™).
+
+```bash
+sudo systemctl enable --now caddy
+sudo journalctl -u caddy -f   # watch cert issuance
+```
+
+Look for `certificate obtained successfully` within ~30 sec.
+
+## Step 7 — Test
+
+Visit `https://phoneticchess.com`. Verify:
+- Green padlock
+- Menu loads, can create session
+- Drag a piece (manual move via REST)
+- Send a tone message (LLM round-trip)
+- Open second tab, join with the URL → typing dots appear → WSS working
+
+## Troubleshooting
+
+| Symptom | Likely cause | Check |
+|---|---|---|
+| 502 from app | Backend or frontend container crashed | `docker compose logs backend frontend` |
+| Caddy can't get cert | DNS not propagated, or port 80 blocked | `dig <domain> +short`; security group port 80 |
+| WebSocket fails | Browser shows `wss://...` failing | Caddy logs; confirm nginx `Upgrade` headers reach backend |
+| `Permission denied (publickey)` on SSH | Wrong user or key | Confirm `ec2-user`, `chmod 600`, correct `-i` path |
+| Connection timed out on SSH | Security group changed or your IP changed | EC2 → security group → re-add SSH from current `My IP` |
+
+---
+
+# Cost & Abuse Protection
+
+EC2 itself is **fixed-cost** — t4g.small is ~$12/mo whether idle or pegged. Data egress is the only variable AWS cost and irrelevant at this app's traffic size. The **real spike vector is Groq** (every `/say` hits the LLM). Protections in priority order:
+
+## Layer 1 — Groq spending cap (most important, 2 min)
+
+Groq Console → **Settings → Spending Limits** → set monthly hard cap (e.g. $10). When hit, Groq returns 429 → existing retry logic in `controller_operations/llm.py` raises `llm_unavailable` (502) → UI prompts user to retry. App stays up, bill stops. Also create a **separate production API key** to rotate independently of dev.
+
+## Layer 2 — App-level rate limiting (biggest moat, ~30 min)
+
+Add `Flask-Limiter` to backend:
+
+```python
+# backend/requirements.txt
+Flask-Limiter==3.8.0
+
+# application.py
+from flask_limiter import Limiter
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=2)   # Caddy + nginx = 2 hops
+limiter = Limiter(
+    key_func=lambda: request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip(),
+    app=app,
+    default_limits=["200/hour"],
+)
+```
+
+Decorate hot routes in `controller/sessions.py`:
+```python
+@bp.post("/sessions")
+@limiter.limit("10/hour")          # cap new game creation per IP
+def create_session(): ...
+
+@bp.post("/sessions/<sid>/say")
+@limiter.limit("20/minute")        # cap LLM calls per IP
+def say_move(sid): ...
+```
+
+**Why this matters:** without proxy header handling, every request looks like `127.0.0.1` (Caddy local), so all clients share one rate-limit bucket. `ProxyFix(x_for=2)` strips the right number of hops (Caddy + nginx).
+
+## Layer 3 — AWS Budgets (5 min)
+
+Billing → **Budgets** → Create budget:
+- Cost budget, Monthly, **$25**
+- Alerts at 50% actual + 100% forecasted → email
+- Optional Budget Action: auto-stop EC2 at 100% via IAM role (`ec2:StopInstances`)
+
+Also enable **Cost Anomaly Detection** (free, emails on baseline-deviating spend).
+
+## Layer 4 — Cloudflare in front (optional, free)
+
+DNS A record → Cloudflare → EC2 instead of direct. Free tier gives bot challenge, basic rate-limit rules, DDoS protection. Caddy still handles the cert (or hand it to Cloudflare via "Full Strict" mode).
+
+## AWS Cost-Spike Vectors to Avoid
+
+Forgotten resources, not crawlers, cause AWS bill surprises:
+
+| Vector | Cost | How to avoid |
+|---|---|---|
+| NAT Gateway | $32/mo + data | Never create one; stay in public subnet |
+| Unattached Elastic IP | $3.60/mo | Release when not in use |
+| Orphan EBS volume | $0.08/GB-mo | Confirm "Delete on termination" at launch |
+| Forgotten large instance | $$$/mo | AWS Budget alert at $25 |
+| RDS instead of Docker Postgres | $13+/mo | Don't open the RDS console |
+| Detailed Monitoring on EC2 | $2.10/mo | Leave disabled |
+| CloudWatch Logs verbose | $0.50/GB ingestion | Keep app log level INFO+, not DEBUG |
+
+## Monthly Hygiene (2 min, when billing email arrives)
+
+1. EC2 → **Volumes**: any `State: available` (unattached)? Delete.
+2. EC2 → **Elastic IPs**: unassociated? Release.
+3. EC2 → **Snapshots**: anything unfamiliar? Delete.
+4. EC2 → **Instances**: anything running you don't recognize? Terminate.
+5. Billing → **Bills**: scan for line items that aren't EC2 / EBS / data transfer. Investigate.
+
+**Expected bill:** $12.26 (t4g.small) + $1.60 (20 GB gp3) + $0–2 (egress) + $0 (attached EIP) = **~$14/mo**, plus $10/yr domain, plus capped Groq spend. If a month is materially higher than $15, something is wrong — find it.
