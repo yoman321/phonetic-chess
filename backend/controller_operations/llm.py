@@ -10,8 +10,14 @@ from error_logger import logger
 # works against it unchanged — only api_key and base_url differ.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.6-27b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
+# Qwen3.6 is a reasoning model whose thinking mode is on by default. Move picking
+# is latency-sensitive (one call per move, inside LLM_TIMEOUT) and reasoning
+# tokens bill as output at $3.00/1M, so default to non-thinking mode. Set
+# LLM_REASONING_EFFORT=default to turn thinking back on. Ignored by models that
+# don't take the parameter.
+LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "none")
 LLM_MAX_RETRIES = min(int(os.environ.get("LLM_MAX_RETRIES", "3")), 3)
 LLM_BACKOFF_BASE = float(os.environ.get("LLM_BACKOFF_BASE", "0.5"))
 
@@ -94,6 +100,14 @@ def pick_move_with_llm(
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.7,
+                # extra_body rather than named kwargs: these are Groq
+                # extensions, and openai>=1.30 (our floor) has no typed
+                # reasoning_effort param. reasoning_format=hidden keeps any
+                # thinking out of message.content so json.loads stays safe.
+                extra_body={
+                    "reasoning_effort": LLM_REASONING_EFFORT,
+                    "reasoning_format": "hidden",
+                },
             )
             content = resp.choices[0].message.content
             last_content = content

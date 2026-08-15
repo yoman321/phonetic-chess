@@ -13,7 +13,7 @@ normally; the tone-based path is the novel feature.
 1. A player types something like *"play it safe"* or *"go for the throat."*
 2. The backend ranks every legal move with a vendored **Sunfish** static eval and
    takes the top ~15 candidates.
-3. Those candidates plus board context are sent to **Groq (Llama-3.3-70B)**, which
+3. Those candidates plus board context are sent to **Groq (Qwen3.6 27B)**, which
    returns the move whose character best fits the phrase, along with a short
    rationale.
 4. The move is applied, persisted, and broadcast to both players over WebSockets;
@@ -48,7 +48,8 @@ can run separately via `cd backend && python application.py` on port 5001).
 
 - `GROQ_API_KEY` (required) — set in `backend/.env`.
 - `DATABASE_URL` — overridden in compose to point at the `db` service.
-- Optional tuning: `LLM_MODEL` (default `llama-3.3-70b-versatile`), `LLM_TIMEOUT`,
+- Optional tuning: `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_REASONING_EFFORT`
+  (default `none`; set to `default` to enable thinking mode), `LLM_TIMEOUT`,
   `LLM_MAX_RETRIES`, `LLM_BACKOFF_BASE`, `IDLE_TTL_SECONDS`.
 
 ## Production Deployment
