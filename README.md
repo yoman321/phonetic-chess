@@ -41,6 +41,16 @@ cp backend/.env.example backend/.env   # then paste your GROQ_API_KEY
 docker compose up --build              # → http://localhost  (frontend on host port 80)
 ```
 
+If the image build fails under BuildKit (seen on macOS), disable it:
+
+```bash
+DOCKER_BUILDKIT=0 docker compose up --build
+```
+
+Vite bakes `VITE_API_BASE` and `VITE_SOCKET_URL` into the bundle at build time, so
+frontend changes only appear after a rebuild — `docker compose up` without `--build`
+will keep serving the old assets.
+
 For frontend-only dev with hot reload: `cd frontend && npm run dev` (the backend
 can run separately via `cd backend && python application.py` on port 5001).
 
