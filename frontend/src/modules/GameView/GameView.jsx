@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Chess } from "chess.js";
 import ChessBoard from "../Chessboard/ChessBoard";
@@ -28,8 +28,22 @@ export default function GameView() {
   const [thinkingSide, setThinkingSide] = useState(null);
   const [thinkingStatus, setThinkingStatus] = useState("thinking");
   const [subscriptError, setSubscriptError] = useState(null);
+  const [opponentJoined, setOpponentJoined] = useState(false);
+
+  const hasConnectedRef = useRef(false);
+  const moveSeqRef = useRef(0);
 
   const myTurn = color && game.turn() === color[0];
+
+  const applySessionState = useCallback(
+    (s) => {
+      game.load(s.fen);
+      setPosition(game.fen());
+      if (typeof s.evalCp === "number") setEvalCp(s.evalCp);
+      if (typeof s.both_joined === "boolean") setOpponentJoined(s.both_joined);
+    },
+    [game],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -42,9 +56,7 @@ export default function GameView() {
           navigate("/", { replace: true });
           return;
         }
-        game.load(s.fen);
-        setPosition(game.fen());
-        if (typeof s.evalCp === "number") setEvalCp(s.evalCp);
+        applySessionState(s);
 
         const join = await joinSession(sessionId, getStoredToken(sessionId));
         if (cancelled) return;
@@ -52,12 +64,17 @@ export default function GameView() {
         setStoredToken(sessionId, join.playerToken);
         setPlayerToken(join.playerToken);
         setColor(join.color);
+        if (typeof join.opponentJoined === "boolean") {
+          setOpponentJoined(join.opponentJoined);
+        }
 
         let introText;
         if (s.status !== "active") {
           introText = `You're ${join.color}. Game ${s.status.replace("_", " ")}.`;
         } else if (join.color === "white") {
-          introText = `You're ${join.color}. Play your first move.`;
+          introText = join.opponentJoined
+            ? `You're ${join.color}. Play your first move.`
+            : `You're ${join.color}. Waiting for your opponent to join.`;
         } else {
           introText = `You're ${join.color}. Waiting for white's first move.`;
         }
@@ -78,13 +95,26 @@ export default function GameView() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, navigate, game]);
+  }, [sessionId, navigate, game, applySessionState]);
 
   useEffect(() => {
     if (!color) return;
     const socket = getSocket();
-    socket.connect();
-    socket.emit("join_session", { sessionId });
+
+    const onConnect = () => {
+      socket.emit("join_session", { sessionId });
+      if (hasConnectedRef.current) {
+        // reconnect: catch up on moves played while we were gone
+        const seq = moveSeqRef.current;
+        getSession(sessionId)
+          .then((s) => {
+            if (!s || seq !== moveSeqRef.current) return; // a move landed mid-fetch
+            applySessionState(s);
+          })
+          .catch(() => {});
+      }
+      hasConnectedRef.current = true;
+    };
 
     const onMove = ({
       fen,
@@ -96,6 +126,7 @@ export default function GameView() {
       rationale,
       priorTone,
     }) => {
+      moveSeqRef.current += 1;
       setThinkingSide(null);
       setThinkingStatus("thinking");
       if (typeof cp === "number") setEvalCp(cp);
@@ -126,20 +157,33 @@ export default function GameView() {
         return next;
       });
     };
-    socket.on("move", onMove);
 
     const onThinking = ({ on, side, status }) => {
       setThinkingSide(on ? side : null);
       setThinkingStatus(status || "thinking");
     };
+
+    // For the player who was already waiting. The joiner is not in the room
+    // yet — this effect returns early until `color` is set — and learns from
+    // their own join response instead.
+    const onPlayerJoined = () => setOpponentJoined(true);
+
+    socket.on("connect", onConnect);
+    socket.on("move", onMove);
     socket.on("thinking", onThinking);
+    socket.on("player_joined", onPlayerJoined);
+    socket.connect();
+    if (socket.connected) onConnect(); // already open on remount; connect won't re-fire
 
     return () => {
+      socket.off("connect", onConnect);
       socket.off("move", onMove);
       socket.off("thinking", onThinking);
+      socket.off("player_joined", onPlayerJoined);
+      hasConnectedRef.current = false; // no spurious resync on a remount
       socket.disconnect();
     };
-  }, [sessionId, color, game]);
+  }, [sessionId, color, game, applySessionState]);
 
   const turnLabel = position && game.turn() === "w" ? "White" : "Black";
 
@@ -186,6 +230,14 @@ export default function GameView() {
         );
         return;
       }
+      if (err.message === "waiting_for_opponent_join") {
+        setMessages((m) => [
+          ...m.filter((msg) => msg.pendingId !== pendingId),
+          { from: "system", text: "Waiting for your opponent to join." },
+        ]);
+        setDraft(text);
+        return;
+      }
       setMessages((m) => [
         ...m,
         { from: "system", text: `Phrase rejected: ${err.message}` },
@@ -194,7 +246,7 @@ export default function GameView() {
   };
 
   const tryMove = (from, to) => {
-    if (!myTurn) return null;
+    if (!myTurn || !opponentJoined) return null;
     try {
       const move = game.move({ from, to, promotion: "q" });
       if (!move) return null;
@@ -208,14 +260,14 @@ export default function GameView() {
   };
 
   const handlePieceDrop = ({ sourceSquare, targetSquare }) => {
-    if (!targetSquare || !myTurn) return false;
+    if (!targetSquare || !myTurn || !opponentJoined) return false;
     setSelectedSquare(null);
     setLegalTargets([]);
     return tryMove(sourceSquare, targetSquare) !== null;
   };
 
   const showMovesFor = (square) => {
-    if (!myTurn) return false;
+    if (!myTurn || !opponentJoined) return false;
     const moves = game.moves({ square, verbose: true });
     if (moves.length === 0) {
       setSelectedSquare(null);
@@ -228,7 +280,7 @@ export default function GameView() {
   };
 
   const handleSquareClick = ({ square }) => {
-    if (!myTurn) return;
+    if (!myTurn || !opponentJoined) return;
     if (selectedSquare && legalTargets.includes(square)) {
       tryMove(selectedSquare, square);
       setSelectedSquare(null);
@@ -313,7 +365,7 @@ export default function GameView() {
           draft={draft}
           setDraft={setDraft}
           onSend={handleSend}
-          disabled={!myTurn || !!thinkingSide}
+          disabled={!myTurn || !!thinkingSide || !opponentJoined}
           thinkingSide={thinkingSide}
           thinkingStatus={thinkingStatus}
           subscriptError={subscriptError}

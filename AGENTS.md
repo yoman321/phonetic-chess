@@ -13,15 +13,48 @@ Read fully before writing code.
 
 ## Commands
 
+Each half is a subshell: chaining bare `cd`s would resolve the second relative
+to the first.
+
 ```bash
-<setup>
-<test-fast>
-<test-full>
-<test-single>
-<typecheck>
-<lint>
-<build>
+# <setup>
+(cd backend && python -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt)
+(cd frontend && npm install)
+
+# <test-fast>     unit only, no database
+(cd backend && .venv/bin/pytest -q -m "not integration")
+(cd frontend && npm test)
+
+# <test-full>     includes the Postgres-backed tier
+backend/scripts/testdb.sh up
+(cd backend && .venv/bin/pytest -q)
+(cd frontend && npm test)
+backend/scripts/testdb.sh down
+
+# <test-single>
+(cd backend && .venv/bin/pytest -q tests/test_say_move_indicator.py::test_indicator_clears_on_success)
+(cd frontend && npm test -- -t "emits join_session on every connect")
+
+# <typecheck>     none configured — see below
+# <lint>
+(cd frontend && npm run lint)
+
+# <build>
+(cd frontend && npm run build)
 ```
+
+`<typecheck>` has no command and `<lint>` covers the frontend only: the backend
+has neither a linter nor a type checker, and the frontend is plain JSX with no
+`tsc`. **Decided 2026-09-09: no `ruff`, no `mypy`** — that role is filled by
+review rather than by a tool. So on the backend those two checks are satisfied
+vacuously: say so plainly, never report them as passing. A backend change is not
+verified by `<test-full>` alone; read it for the classes of error a type checker
+would have caught — wrong argument names and counts, a `None` reaching something
+that cannot take one, an exception path that is raised but never mapped.
+
+`backend/scripts/testdb.sh` runs a throwaway Postgres on 127.0.0.1:55432, never
+the compose `db` service. Tests marked `integration` are the only ones needing
+it. See `README.md`.
 
 ## Sessions
 

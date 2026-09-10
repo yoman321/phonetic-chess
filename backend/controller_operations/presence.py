@@ -9,12 +9,12 @@ IDLE_TTL_SECONDS = int(os.environ.get("IDLE_TTL_SECONDS", "600"))  # default 10 
 _presence_lock = threading.Lock()
 _active_sids = {}      # session_id -> set of socketio sids in the room
 _cleanup_timers = {}   # session_id -> threading.Timer
-_pg = None
+_db = None             # zero-arg connection factory, not a connection
 
 
-def init(pg):
-    global _pg
-    _pg = pg
+def init(db):
+    global _db
+    _db = db
 
 
 def _delete_session(sid):
@@ -22,8 +22,11 @@ def _delete_session(sid):
         _cleanup_timers.pop(sid, None)
         if _active_sids.get(sid):
             return  # someone reconnected just before deletion fired
-    with _pg.cursor() as cur:
-        sessions_q.delete_session(cur, sid)
+        # The DELETE stays inside the lock. Released first, a track_join landing
+        # between the re-check and the DELETE would leave a client sitting in a
+        # room whose session no longer exists.
+        with _db() as pg, pg.cursor() as cur:
+            sessions_q.delete_session(cur, sid)
     logger.info("[cleanup] deleted idle session %s", sid)
 
 
@@ -46,7 +49,7 @@ def cancel_cleanup(sid):
 
 
 def reschedule_existing_sessions():
-    with _pg.cursor() as cur:
+    with _db() as pg, pg.cursor() as cur:
         ids = sessions_q.select_all_session_ids(cur)
     for sid in ids:
         schedule_cleanup(sid)

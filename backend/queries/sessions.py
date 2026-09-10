@@ -16,9 +16,23 @@ def insert_session(cur, sid, fen, color, token):
 
 
 def select_session_summary(cur, sid):
+    """Public session state. Returns whether both colours are claimed, never
+    the token values — GET /sessions/:id is unauthenticated."""
     cur.execute(
-        "SELECT id, fen, pgn, status, created_at, updated_at "
+        "SELECT id, fen, pgn, status, created_at, updated_at, "
+        "(white_token IS NOT NULL AND black_token IS NOT NULL) AS both_joined "
         "FROM sessions WHERE id = %s",
+        (sid,),
+    )
+    return cur.fetchone()
+
+
+def select_tokens(cur, sid):
+    """Unlocked read. Safe because tokens never change once set: the setters
+    below are called only when the column is NULL, nothing else writes those
+    columns, and only delete_session removes the row."""
+    cur.execute(
+        "SELECT white_token, black_token FROM sessions WHERE id = %s",
         (sid,),
     )
     return cur.fetchone()

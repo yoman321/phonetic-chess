@@ -16,7 +16,8 @@ and broadcast the same `move` event.
 
 ```
 backend/
-  application.py              app wiring: DB connection, Flask, SocketIO, blueprint
+  application.py              app wiring: Flask, SocketIO, blueprint
+  db.py                       connect(): one short-lived connection per operation
   schema.sql                  baked into the db image at build time
   controller/                 HTTP + WebSocket edges — parse, delegate, serialize
     sessions.py               /sessions REST routes, ApiError -> JSON handler
@@ -74,7 +75,7 @@ backend container :5001 (expose only, no host port)
 
 `-w 1` is deliberate: Flask-SocketIO has no message queue configured, so rooms and
 the in-process presence maps assume a single process. `presence.reschedule_existing_sessions()`
-also runs at import time (`application.py:26`) and would fire once per worker.
+also runs at import time (`application.py:19`) and would fire once per worker.
 
 Locally without Docker, the frontend dev server talks to `http://127.0.0.1:5001`
 directly — `api.js:1` and `socket.js:8` default to that when the `VITE_*` build
@@ -109,10 +110,10 @@ All JSON. Errors are `{"error": "<code>", ...extra}` with the status carried on 
 | Route | Does | Notable failures |
 |---|---|---|
 | `POST /sessions` | Creates a game, assigns the creator a color and token | `bad_color` 400, `could_not_allocate_session_id` 500 after 5 id collisions |
-| `GET /sessions/<sid>` | Board summary + `evalCp` | `not_found` 404 |
-| `POST /sessions/<sid>/join` | Claims a free color, or re-identifies an existing token | `session_full` 409 |
-| `POST /sessions/<sid>/move` | Plays an explicit UCI | `not_your_turn` 403, `illegal_move` 400, `game_over` 409 |
-| `POST /sessions/<sid>/say` | Tone phrase → LLM-chosen move | `llm_unavailable` 502, `llm_bad_response` 502 |
+| `GET /sessions/<sid>` | Board summary + `evalCp` + `both_joined` | `not_found` 404 |
+| `POST /sessions/<sid>/join` | Claims a free color, or re-identifies an existing token; returns `opponentJoined` | `session_full` 409 |
+| `POST /sessions/<sid>/move` | Plays an explicit UCI | `not_your_turn` 403, `illegal_move` 400, `game_over` 409, `waiting_for_opponent_join` 409 |
+| `POST /sessions/<sid>/say` | Tone phrase → LLM-chosen move | `llm_unavailable` 502, `llm_bad_response` 502, `waiting_for_opponent_join` 409 |
 
 ## WebSocket events
 
@@ -125,6 +126,9 @@ Room name is `session:<sid>` (`helpers.py:17`).
   `intent`, `rationale`, `priorTone`.
 - **server → client** `thinking` — `{on, side, status}` where status is `thinking`
   or `retrying`, driving the opponent's typing dots and the mover's own subscript.
+  Emitted under a `finally`, so the `on:false` always arrives.
+- **server → client** `player_joined` — `{color}`, after the claiming transaction
+  commits. For the player already waiting; the joiner learns from their own response.
 
 Sockets are broadcast-only for state; every mutation goes over HTTP and comes back
 through the room. The client that initiated a move gets it twice (HTTP response and
@@ -203,8 +207,8 @@ during development.
 **Idle GC** (`presence.py`) — module-level dicts map session id → set of socket ids,
 and session id → `threading.Timer`. When a room empties on disconnect, a timer is
 armed for `IDLE_TTL_SECONDS` (default 600); a rejoin cancels it. `_delete_session`
-re-checks membership under the lock before deleting, so a reconnect landing between
-fire and delete is safe. On boot, every existing session gets a timer
+re-checks membership *and* issues the DELETE under the lock, so a `track_join`
+cannot land between the check and the delete. On boot, every existing session gets a timer
 (`reschedule_existing_sessions`) so rows can't outlive a restart. Sessions are also
 armed at creation, so a game nobody ever opens still expires.
 
@@ -237,7 +241,7 @@ chat message.
 ## Configuration
 
 `GROQ_API_KEY` is required and read at import (`llm.py:11`). `DATABASE_URL` is
-required by `application.py:16` and is force-overridden in compose to point at the
+read per connection by `db.py` and is force-overridden in compose to point at the
 `db` service, so the value in `backend/.env` is ignored under Docker.
 
 Optional: `GROQ_BASE_URL`, `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_TIMEOUT`
@@ -270,29 +274,34 @@ volume**, so a schema change needs a migration or a `db_data` volume reset.
 
 Recorded as observations, not proposed work.
 
-**One global database connection.** `application.py:18` opens a single
-`psycopg.connect(...)` shared by every request. psycopg's connection lock
-(`connection.py:77`) serializes individual operations, but it is not held across a
-`with pg.transaction()` block, and `Transaction._push_savepoint` decides outer-vs-inner
-by checking `pgconn.transaction_status == IDLE` — so a second `transaction()` entered
-while the first is open becomes a **SAVEPOINT inside it**, not an independent
-transaction. Under the gevent worker, a greenlet parked on the Groq call can let
-another request reach that code, at which point two games share one physical
-transaction and one commit boundary.
+**One connection per operation.** `db.connect()` is a context manager opening a
+short-lived `psycopg.connect(...)`; `application.py` passes the *factory* to the
+blueprint and to presence, and each operation opens and closes its own. This is
+deliberate rather than incidental. Transaction state lives on the connection:
+`Transaction._push_savepoint` decides outer-vs-inner by checking
+`pgconn.transaction_status == IDLE`, so a second `transaction()` entered on a shared
+connection while the first is open becomes a **SAVEPOINT inside it** — one game's
+ROLLBACK then discards another's committed move. psycopg's connection lock
+(`connection.py:77`) does not prevent it: it is taken per operation and is not held
+across a `with pg.transaction()` block. A pool would work too; at this traffic level
+a connect costs ~1-3 ms against a call that may take 30 s.
 
 **The LLM call sits inside the transaction.** `say_move` holds the `FOR UPDATE` row
 lock across the entire Groq round-trip — up to `LLM_TIMEOUT` seconds plus retries and
-backoff. Even with per-request connections, that is a long lock; with the shared
-connection it stalls unrelated games.
+backoff. Nothing waits on it: no move is accepted until both colours are claimed, and
+`join_session` answers a returning player and a full game from an unlocked lookup, so
+the lock is only ever taken while a colour is still free. What remains is a resource
+argument — each in-flight `say_move` pins one Postgres backend.
 
 **The alternation guard is redundant.** `say_move`'s last-mover check duplicates the
 `my_color != board.turn` check that follows it, since both derive from the same move
 sequence. Harmless defense in depth, but it is the reason `say` needs a `moves` read
 that `move` doesn't.
 
-**No test suite.** There are no tests, and `plans/`, `handoff.md`, and `BACKLOG.md`
-do not exist yet — the workflow in `AGENTS.md` is not yet in use. The command block
-in `AGENTS.md` is still placeholders.
+**The test suite is two tiers.** `backend/tests/` runs against fakes by default;
+`@pytest.mark.integration` marks the tests that need a live Postgres, which
+`backend/scripts/testdb.sh` brings up on 127.0.0.1:55432. The frontend uses vitest
+against a hand-driven fake socket. See `AGENTS.md` for the commands.
 
 **CORS is fully open** — `CORS(app)` and `cors_allowed_origins="*"` (`application.py:21`).
 Behind the nginx/Caddy same-origin setup nothing depends on it, but it means the API

@@ -54,6 +54,36 @@ will keep serving the old assets.
 For frontend-only dev with hot reload: `cd frontend && npm run dev` (the backend
 can run separately via `cd backend && python application.py` on port 5001).
 
+## Tests
+
+Two suites, both runnable from a checkout. The backend needs a virtualenv with
+`requirements-dev.txt`; the frontend needs `npm install`.
+
+```bash
+# setup
+(cd backend && python -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt)
+(cd frontend && npm install)
+
+# fast — unit tier only, no database
+(cd backend && .venv/bin/pytest -q -m "not integration")
+(cd frontend && npm test)
+
+# full — includes the Postgres-backed tier
+backend/scripts/testdb.sh up
+(cd backend && .venv/bin/pytest -q)
+(cd frontend && npm test)
+backend/scripts/testdb.sh down
+```
+
+`backend/scripts/testdb.sh` starts a throwaway Postgres on **127.0.0.1:55432**,
+never the compose `db` service, so test data cannot touch the development volume.
+It builds `backend/db.Dockerfile` when the Docker daemon is reachable and
+otherwise falls back to a local `initdb` cluster under `TMPDIR` (needs
+postgres 16 on `PATH`). Point the tier somewhere else with `TEST_DATABASE_URL`.
+
+Tests marked `integration` are the only ones that need a database; `-m "not
+integration"` runs with none present.
+
 ## Environment Variables
 
 - `GROQ_API_KEY` (required) — set in `backend/.env`.

@@ -1,30 +1,24 @@
-import os
-
-import psycopg
 from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
 from flask_socketio import SocketIO
-from psycopg.rows import dict_row
 
+import db
 from controller.sessions import make_sessions_bp
 from controller.sockets import register_sockets
 from controller_operations import presence
 
 load_dotenv()
 
-DATABASE_URL = os.environ["DATABASE_URL"]
-
-pg = psycopg.connect(DATABASE_URL, autocommit=True, row_factory=dict_row)
-
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-presence.init(pg)
+# The factory, not a connection: every operation opens and closes its own.
+presence.init(db.connect)
 presence.reschedule_existing_sessions()
 
-app.register_blueprint(make_sessions_bp(pg, socketio))
+app.register_blueprint(make_sessions_bp(db.connect, socketio))
 register_sockets(socketio)
 
 
