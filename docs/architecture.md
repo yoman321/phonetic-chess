@@ -73,9 +73,13 @@ backend container :5001 (expose only, no host port)
         └──→ api.groq.com         OpenAI-compatible endpoint, via the openai SDK
 ```
 
-`-w 1` is deliberate: Flask-SocketIO has no message queue configured, so rooms and
-the in-process presence maps assume a single process. `presence.reschedule_existing_sessions()`
-also runs at import time (`application.py:19`) and would fire once per worker.
+`-w 1` is deliberate: Flask-SocketIO has no message queue configured, so
+`socketio.emit(..., to=room)` reaches only the clients of the worker that sent it.
+Presence now lives in Postgres rather than in per-process dicts, which is a
+*prerequisite* for multiple workers, not the thing that achieves it — the message
+queue is still missing. The boot wipe (`presence.clear_connections()`,
+`application.py:22`) is also single-process by construction: a second worker
+starting would clear the first worker's connections.
 
 Locally without Docker, the frontend dev server talks to `http://127.0.0.1:5001`
 directly — `api.js:1` and `socket.js:8` default to that when the `VITE_*` build
@@ -85,13 +89,23 @@ args are absent.
 
 ## Data model
 
-Two tables, `schema.sql`. Games are ephemeral — there is no user table, and no
-history beyond the current game.
+Three tables, `schema.sql`. There is no user table and no history beyond the
+current game, but games are kept rather than collected — see Identity and session
+lifecycle.
 
 **sessions** — one row per game.
 `id` (8-char base36 PK), `fen`, `pgn`, `white_token`, `black_token`,
 `status` CHECK-constrained to `active | white_won | black_won | draw | abandoned`,
-`created_at`, `updated_at`. Indexed on `updated_at`.
+`created_at`, `updated_at`, `last_disconnected_at`. Indexed on `updated_at`.
+`last_disconnected_at` is written only by the trigger below and is NULL for a game
+no socket has ever left.
+
+**session_connections** — one row per socket per room, `PRIMARY KEY (session_id,
+socket_sid)`, cascade-deleted with the session, additionally indexed on
+`socket_sid` because the disconnect looks up by socket alone. This is the live
+membership of every room. An `AFTER DELETE ... FOR EACH ROW` trigger
+(`session_mark_last_disconnect`) stamps `sessions.last_disconnected_at = NOW()`
+unconditionally on every row removed.
 
 **moves** — one row per ply, `PRIMARY KEY (session_id, ply)`, cascade-deleted with
 the session. Holds `uci`, `san`, and `tone_summary` — the rolling narrative the LLM
@@ -110,17 +124,30 @@ All JSON. Errors are `{"error": "<code>", ...extra}` with the status carried on 
 | Route | Does | Notable failures |
 |---|---|---|
 | `POST /sessions` | Creates a game, assigns the creator a color and token | `bad_color` 400, `could_not_allocate_session_id` 500 after 5 id collisions |
-| `GET /sessions/<sid>` | Board summary + `evalCp` + `both_joined` | `not_found` 404 |
-| `POST /sessions/<sid>/join` | Claims a free color, or re-identifies an existing token; returns `opponentJoined` | `session_full` 409 |
-| `POST /sessions/<sid>/move` | Plays an explicit UCI | `not_your_turn` 403, `illegal_move` 400, `game_over` 409, `waiting_for_opponent_join` 409 |
-| `POST /sessions/<sid>/say` | Tone phrase → LLM-chosen move | `llm_unavailable` 502, `llm_bad_response` 502, `waiting_for_opponent_join` 409 |
+| `GET /sessions/<sid>` | Board summary + `evalCp` + `both_joined` + `ended` | `not_found` 404 |
+| `POST /sessions/<sid>/join` | Claims a free color, or re-identifies an existing token; returns `opponentJoined` | `session_full` 409, `game_ended` 410 |
+| `POST /sessions/<sid>/move` | Plays an explicit UCI | `game_ended` 410, `not_your_turn` 403, `illegal_move` 400, `game_over` 409, `waiting_for_opponent_join` 409 |
+| `POST /sessions/<sid>/say` | Tone phrase → LLM-chosen move | `game_ended` 410, `llm_unavailable` 502, `llm_bad_response` 502, `waiting_for_opponent_join` 409 |
+
+`ended` and `game_ended` are the idle deadline, not `status`: a game won by
+checkmate is over in a different sense and is reported through `status`. The read
+path reports, every write path refuses — that split is what lets the client show
+the final position with a modal over it. `game_ended` is checked ahead of
+`game_over` in both move paths, because a game past its deadline is unreachable
+however it finished.
 
 ## WebSocket events
 
 Room name is `session:<sid>` (`helpers.py:17`).
 
-- **client → server** `join_session {sessionId}` — joins the room, registers the
-  socket in presence, cancels any pending cleanup timer.
+- **client → server** `join_session {sessionId}` — checks the idle deadline
+  first; when the game is past it, the socket joins nothing, is recorded nowhere,
+  and gets `game_ended` back. Otherwise it joins the room and inserts its
+  `session_connections` row. The check must precede the insert, or the predicate
+  sees the joiner and no game is ever idle.
+- **server → client** `game_ended` — `{sessionId}`, to the requesting socket only.
+  A silent refusal would leave a reconnecting client in a room receiving no moves
+  and given no reason.
 - **server → client** `move` — the full post-move payload: `fen`, `pgn`, `status`,
   `ply`, `uci`, `san`, `evalCp`, plus (say-moves only) `text`, `tone_summary`,
   `intent`, `rationale`, `priorTone`.
@@ -204,15 +231,59 @@ Because the token is per-tab `sessionStorage`, opening the same game in a second
 claims the *other* color rather than resuming — which is also how you play yourself
 during development.
 
-**Idle GC** (`presence.py`) — module-level dicts map session id → set of socket ids,
-and session id → `threading.Timer`. When a room empties on disconnect, a timer is
-armed for `IDLE_TTL_SECONDS` (default 600); a rejoin cancels it. `_delete_session`
-re-checks membership *and* issues the DELETE under the lock, so a `track_join`
-cannot land between the check and the delete. On boot, every existing session gets a timer
-(`reschedule_existing_sessions`) so rows can't outlive a restart. Sessions are also
-armed at creation, so a game nobody ever opens still expires.
+**The idle deadline** (`presence.py`, `queries/connections.py`) — nothing is
+collected and no game is ever deleted. A game that goes quiet keeps its row and its
+moves, so a player who hits a problem can reach a developer. Whether a game has
+*ended* is computed when someone tries to use it, from one expression:
 
-The `abandoned` status in the schema is never written — abandonment is a row delete.
+```sql
+NOT EXISTS (SELECT 1 FROM session_connections c WHERE c.session_id = s.id)
+AND COALESCE(s.last_disconnected_at, s.created_at) < NOW() - make_interval(secs => %s)
+```
+
+Nobody connected right now, and the room empty longer than `IDLE_TTL_SECONDS`
+(default 600). `COALESCE` covers the game created and never opened, which has no
+stamp and is judged from `created_at`.
+
+`presence.py` holds no state and starts nothing — no lock, no dicts, no timers, no
+boot-time rebuild — so two callers for unrelated games never contend, and a restart
+loses nothing it has to reconstruct. A socket join inserts a row; a disconnect
+deletes every row for that socket and the trigger stamps each affected game.
+
+The stamp is written on **every** disconnect, not only the last one. Guarding on
+"was this the last row?" loses the write when two sockets of one game disconnect in
+concurrent transactions — neither sees the other's uncommitted delete under READ
+COMMITTED — and a NULL stamp then falls through to `created_at`, reporting a
+half-hour game as ended seconds after both its tabs close. Written
+unconditionally, a NULL stamp means exactly one thing: no socket has ever left.
+
+A disconnect from a game with a phrase in flight waits for the LLM call, because
+the trigger's `UPDATE sessions` needs the row `say_move` holds. Leave it: the call
+is bounded by `LLM_TIMEOUT`, and the only effect is that the clock starts late,
+which keeps the game joinable slightly longer. A `lock_timeout` here would trade a
+late write for a lost one, and a lost stamp reads as a game never opened.
+
+On boot, `presence.clear_connections()` (`application.py:22`) deletes every
+connection row — sockets do not outlive the process that held them, so rows
+orphaned by a crash go with them. The restart grace falls out of the trigger rather
+than being coded: the DELETE fires it once per row, so every game that had
+connections gets a fresh full window from boot, while a game that had none keeps
+its stamp and stays correctly ended.
+
+There is no heartbeat of ours. Socket.IO already pings each client every
+`ping_interval` (25s) and reaps anything missing a pong within `ping_timeout`
+(20s), firing the same `disconnect` handler a clean close does.
+
+`say_move` and `make_move` take `FOR NO KEY UPDATE`, not `FOR UPDATE`
+(`queries/sessions.py:61`). A `session_connections` insert makes Postgres check the
+foreign key by taking `FOR KEY SHARE` on the parent row, which `FOR UPDATE` blocks
+— so a socket joining a game with a phrase in flight would wait up to ~90s.
+`FOR NO KEY UPDATE` still conflicts with itself, so mover-versus-mover exclusion is
+unchanged.
+
+The `abandoned` status in the schema is never written: ended-ness is computed, never
+stored, and no game is deleted either. It was considered here and deliberately left
+as a dead value in the CHECK constraint.
 
 ---
 
@@ -231,6 +302,15 @@ one loads and joins the session, one manages the socket subscription — keyed o
 the per-move "?" explanation card, thinking dots for either side, and the input,
 disabled whenever it isn't your turn or a move is being computed.
 
+A game past its deadline gets its own render branch rather than a flag on the main
+one: that render gates the board on `color`, which stays null here so the socket
+effect returns early and no socket is opened. The branch renders the final position
+with `GameEndedModal` over it, orientation fixed white — colour is not recoverable
+client-side, since storage keeps only the token and the one call that maps a token
+to a colour is the join that now refuses. The board is behind the modal, so the
+orientation is cosmetic. A `game_ended` socket listener sets the same flag, for a
+client that joined before the deadline and reconnects after it.
+
 Two LLM errors are handled specially on send (`GameView.jsx:158`): `llm_bad_response`
 and `llm_unavailable` both remove the optimistic bubble, restore the text to the
 draft box so the phrase isn't lost, and show an inline subscript error rather than a
@@ -248,7 +328,9 @@ Optional: `GROQ_BASE_URL`, `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_TIMEOU
 (30), `LLM_REASONING_EFFORT` (`none` — thinking is off by default because reasoning
 tokens bill as output and every move is one latency-sensitive call; set to `default`
 to enable), `LLM_MAX_RETRIES` (3, hard-capped at 3), `LLM_BACKOFF_BASE` (0.5),
-`IDLE_TTL_SECONDS` (600).
+`IDLE_TTL_SECONDS` (600 — how long a room must sit empty before the game is
+refused; it is compared against, not counted down, and nothing is deleted when it
+passes).
 
 Frontend config is build-time only — Vite inlines `VITE_API_BASE` and
 `VITE_SOCKET_URL` into the bundle, passed as Docker build args, so changing them

@@ -13,13 +13,16 @@ import pytest
 
 # Set, not default: a developer with a real DATABASE_URL exported must not have
 # the suite run against their own data. Must happen before application is
-# imported: reschedule_existing_sessions() opens a connection at import time.
+# imported: the boot wipe, presence.clear_connections(), runs at import time
+# and DELETEs every row of session_connections in whatever database this
+# names.
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql://phonetic:phonetic@127.0.0.1:55432/phonetic_chess",
 )
-# presence schedules a deletion timer for every session it sees. An hour is long
-# enough that no test row is collected while a test is still using it.
+# Nothing is collected any more, so this is not about outliving a timer: it is
+# the window a game must sit empty before it is refused, and an hour is long
+# enough that no test is refused a join part-way through.
 os.environ.setdefault("IDLE_TTL_SECONDS", "3600")
 
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -82,7 +85,7 @@ def fake_session_row(**overrides):
 
 
 class FakeCursor:
-    """Answers the four query shapes sessions_ops reaches through queries/."""
+    """Answers the query shapes sessions_ops reaches through queries/."""
 
     def __init__(self, session_row, last_move_row=None, fail_on=None):
         self.session_row = session_row
@@ -96,7 +99,12 @@ class FakeCursor:
         self.executed.append((collapsed, params))
         if self.fail_on and self.fail_on in collapsed:
             raise RuntimeError(f"database write failed: {self.fail_on}")
-        if collapsed.startswith("SELECT") and "FROM sessions" in collapsed:
+        if "AS idle" in collapsed:
+            # The idle predicate. These fakes describe a game someone is playing,
+            # so it is never idle; the deadline is asserted against a real
+            # database in the integration tier, where the clock is real.
+            self._result = {"idle": False}
+        elif collapsed.startswith("SELECT") and "FROM sessions" in collapsed:
             self._result = self.session_row
         elif collapsed.startswith("SELECT") and "FROM moves" in collapsed:
             self._result = self.last_move_row
@@ -233,19 +241,3 @@ def make_session(pgdb):
                 stacklevel=1,
             )
 
-
-@pytest.fixture
-def clean_presence(app_module):
-    """Drop presence's in-memory room state before and after a test."""
-    from controller_operations import presence
-
-    def _reset():
-        with presence._presence_lock:
-            for timer in presence._cleanup_timers.values():
-                timer.cancel()
-            presence._cleanup_timers.clear()
-            presence._active_sids.clear()
-
-    _reset()
-    yield presence
-    _reset()

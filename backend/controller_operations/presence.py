@@ -1,15 +1,21 @@
-import os
-import threading
+"""Who is connected to which game, and how long each game has been empty.
 
-from error_logger import logger
-from queries import sessions as sessions_q
+Both live in Postgres: `session_connections` holds a row per socket per room,
+and the AFTER DELETE trigger on it stamps `sessions.last_disconnected_at`. This
+module holds no state of its own and starts nothing — no lock, no dicts, no
+timers, no boot-time rebuild — so a restart loses nothing it has to reconstruct
+and two callers for unrelated games never contend.
+
+Nothing here deletes a game. A game that goes quiet keeps its row and its moves;
+whether it has passed its deadline is computed when someone tries to use it.
+"""
+import os
+
+from queries import connections as connections_q
 
 IDLE_TTL_SECONDS = int(os.environ.get("IDLE_TTL_SECONDS", "600"))  # default 10 min
 
-_presence_lock = threading.Lock()
-_active_sids = {}      # session_id -> set of socketio sids in the room
-_cleanup_timers = {}   # session_id -> threading.Timer
-_db = None             # zero-arg connection factory, not a connection
+_db = None  # zero-arg connection factory, not a connection
 
 
 def init(db):
@@ -17,57 +23,45 @@ def init(db):
     _db = db
 
 
-def _delete_session(sid):
-    with _presence_lock:
-        _cleanup_timers.pop(sid, None)
-        if _active_sids.get(sid):
-            return  # someone reconnected just before deletion fired
-        # The DELETE stays inside the lock. Released first, a track_join landing
-        # between the re-check and the DELETE would leave a client sitting in a
-        # room whose session no longer exists.
-        with _db() as pg, pg.cursor() as cur:
-            sessions_q.delete_session(cur, sid)
-    logger.info("[cleanup] deleted idle session %s", sid)
-
-
-def schedule_cleanup(sid):
-    with _presence_lock:
-        existing = _cleanup_timers.pop(sid, None)
-        if existing:
-            existing.cancel()
-        timer = threading.Timer(IDLE_TTL_SECONDS, _delete_session, args=(sid,))
-        timer.daemon = True
-        _cleanup_timers[sid] = timer
-        timer.start()
-
-
-def cancel_cleanup(sid):
-    with _presence_lock:
-        existing = _cleanup_timers.pop(sid, None)
-    if existing:
-        existing.cancel()
-
-
-def reschedule_existing_sessions():
-    with _db() as pg, pg.cursor() as cur:
-        ids = sessions_q.select_all_session_ids(cur)
-    for sid in ids:
-        schedule_cleanup(sid)
-
-
 def track_join(sid, socket_sid):
-    with _presence_lock:
-        _active_sids.setdefault(sid, set()).add(socket_sid)
+    with _db() as pg, pg.cursor() as cur:
+        connections_q.track(cur, sid, socket_sid)
 
 
 def remove_socket(socket_sid):
-    """Drop a socket from all rooms; return list of sessions that became empty."""
-    now_empty = []
-    with _presence_lock:
-        for sid, members in list(_active_sids.items()):
-            if socket_sid in members:
-                members.discard(socket_sid)
-                if not members:
-                    _active_sids.pop(sid, None)
-                    now_empty.append(sid)
-    return now_empty
+    """Drop a socket from every room it had joined.
+
+    Returns nothing. The trigger stamps each affected game, so there is no list
+    of newly-empty sessions for a caller to act on any more.
+    """
+    with _db() as pg, pg.cursor() as cur:
+        connections_q.release(cur, socket_sid)
+
+
+def is_idle(sid, ttl_seconds=None):
+    """True when nobody is connected to the game and the room has been empty
+    longer than the window.
+
+    The default is resolved per call, not bound at def time, so a test that
+    rebinds IDLE_TTL_SECONDS on this module is actually obeyed.
+
+    Callers already holding a cursor should use `queries.connections.is_idle`
+    directly rather than opening a second connection — the move paths evaluate
+    it under their own row lock.
+    """
+    if ttl_seconds is None:
+        ttl_seconds = IDLE_TTL_SECONDS
+    with _db() as pg, pg.cursor() as cur:
+        return connections_q.is_idle(cur, sid, ttl_seconds)
+
+
+def clear_connections():
+    """The boot wipe. Sockets do not outlive the process that held them, so
+    every row is stale at startup and rows orphaned by a crash go with them.
+
+    This also restarts the idle clock: the DELETE fires the row trigger once per
+    row, so every game that had connections gets a fresh full window from boot,
+    while a game that had none keeps its stamp and stays correctly ended.
+    """
+    with _db() as pg, pg.cursor() as cur:
+        connections_q.release_all(cur)

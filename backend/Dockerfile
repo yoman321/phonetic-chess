@@ -22,6 +22,7 @@ EXPOSE 5001
 # which Flask-SocketIO needs. Plain `gevent` worker accepts the HTTP
 # handshake but can't upgrade, so SocketIO falls back to broken polling.
 # Keep workers=1: SocketIO without a message queue assumes a single
-# process, and presence.reschedule runs at import time.
+# process, and the boot wipe (presence.clear_connections) runs at import
+# time — a second worker starting would clear the first's connections.
 CMD ["gunicorn", "-k", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", \
      "-w", "1", "-b", "0.0.0.0:5001", "application:app"]

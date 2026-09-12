@@ -5,6 +5,7 @@ import ChessBoard from "../Chessboard/ChessBoard";
 import Chatbox from "../Chatbox/Chatbox";
 import EvalBar from "../EvalBar/EvalBar";
 import FatalError from "../FatalError/FatalError";
+import GameEndedModal from "./GameEndedModal";
 import { getSession, joinSession, postMove, postSay } from "../../api";
 import { getStoredToken, setStoredToken } from "../../storage";
 import { getSocket } from "../../socket";
@@ -29,6 +30,7 @@ export default function GameView() {
   const [thinkingStatus, setThinkingStatus] = useState("thinking");
   const [subscriptError, setSubscriptError] = useState(null);
   const [opponentJoined, setOpponentJoined] = useState(false);
+  const [ended, setEnded] = useState(false);
 
   const hasConnectedRef = useRef(false);
   const moveSeqRef = useRef(0);
@@ -57,6 +59,14 @@ export default function GameView() {
           return;
         }
         applySessionState(s);
+
+        if (s.ended) {
+          // Leave `color` null: that is what keeps the socket effect below from
+          // opening a connection. The ended render branch does not need it.
+          setEnded(true);
+          setValidating(false);
+          return;
+        }
 
         const join = await joinSession(sessionId, getStoredToken(sessionId));
         if (cancelled) return;
@@ -168,10 +178,15 @@ export default function GameView() {
     // their own join response instead.
     const onPlayerJoined = () => setOpponentJoined(true);
 
+    // The client half of the server's socket-side refusal: a client that joined
+    // before the deadline and reconnects after it gets the modal, not silence.
+    const onGameEnded = () => setEnded(true);
+
     socket.on("connect", onConnect);
     socket.on("move", onMove);
     socket.on("thinking", onThinking);
     socket.on("player_joined", onPlayerJoined);
+    socket.on("game_ended", onGameEnded);
     socket.connect();
     if (socket.connected) onConnect(); // already open on remount; connect won't re-fire
 
@@ -180,6 +195,7 @@ export default function GameView() {
       socket.off("move", onMove);
       socket.off("thinking", onThinking);
       socket.off("player_joined", onPlayerJoined);
+      socket.off("game_ended", onGameEnded);
       hasConnectedRef.current = false; // no spurious resync on a remount
       socket.disconnect();
     };
@@ -321,6 +337,39 @@ export default function GameView() {
         <main className="layout">
           <p className="muted">Loading session…</p>
         </main>
+      </div>
+    );
+  }
+
+  if (ended) {
+    // Its own branch rather than a flag on the main render: that one gates the
+    // board on `color`, which stays null here. Orientation is fixed white —
+    // colour is not recoverable client-side, since storage keeps only the token
+    // and the one call that maps a token to a colour is the join that refuses.
+    // The board sits behind the modal, so the orientation is cosmetic.
+    return (
+      <div className="app">
+        <header className="app-header">
+          <h1>Phonetic Chess</h1>
+          <div className="header-right">
+            <span className="session-tag">
+              Session: <code>{sessionId}</code>
+            </span>
+            <button onClick={() => navigate("/")} className="reset-btn">Leave</button>
+          </div>
+        </header>
+
+        <main className="layout">
+          <ChessBoard
+            position={position}
+            turnLabel={turnLabel}
+            squareStyles={{}}
+            orientation="white"
+            leftRail={<EvalBar evalCp={evalCp} orientation="white" />}
+          />
+        </main>
+
+        <GameEndedModal />
       </div>
     );
   }

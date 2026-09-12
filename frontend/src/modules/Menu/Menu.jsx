@@ -1,10 +1,14 @@
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import CreateGameModal from "./CreateGameModal";
 import JoinGameModal from "./JoinGameModal";
 import "./Menu.css";
 
 export default function Menu() {
-  const [openModal, setOpenModal] = useState(null);
+  // Seeded from router state so GameEndedModal's "New game" lands on the
+  // colour picker rather than on a bare menu.
+  const { state } = useLocation();
+  const [openModal, setOpenModal] = useState(state?.openModal ?? null);
   const close = () => setOpenModal(null);
 
   return (

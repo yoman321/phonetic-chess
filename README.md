@@ -54,6 +54,19 @@ will keep serving the old assets.
 For frontend-only dev with hot reload: `cd frontend && npm run dev` (the backend
 can run separately via `cd backend && python application.py` on port 5001).
 
+### Applying a schema change
+
+There is no migration runner. `db.Dockerfile` bakes `backend/schema.sql` into the
+initdb scripts, which run only on an empty volume — so the file reaches a fresh
+database and nothing else. For a database that already has data:
+
+```bash
+psql "$DATABASE_URL" -f backend/schema.sql
+```
+
+`schema.sql` is written to be safe to re-run, and is additive only: it can create
+and add, never alter or remove.
+
 ## Tests
 
 Two suites, both runnable from a checkout. The backend needs a virtualenv with

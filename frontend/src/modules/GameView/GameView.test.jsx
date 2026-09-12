@@ -246,3 +246,39 @@ describe("invariant 3 — resync", () => {
     expect(boardPosition()).toBe(FEN_AFTER_THREE_MOVES);
   });
 });
+
+/* Numbered against plans/presence-table.md, not against the two blocks above —
+ * those count invariants from the closed plans/live-game-integrity.md. */
+describe("presence-table invariant 11 — a game past its deadline", () => {
+  it("renders the final position under the modal, joining nothing", async () => {
+    api.current.getSession = vi.fn().mockResolvedValue({
+      id: SESSION_ID,
+      fen: FEN_AFTER_THREE_MOVES,
+      pgn: "1. e4 e5 2. Nf3",
+      status: "active",
+      evalCp: 42,
+      ended: true,
+    });
+
+    renderGame();
+
+    // The FEN assertion is the load-bearing one. Asserting only that nothing
+    // was joined passes just as well against a blank screen.
+    await waitFor(() => expect(boardPosition()).toBe(FEN_AFTER_THREE_MOVES));
+
+    // color stays null so the socket effect returns early: no join, no socket.
+    expect(api.current.joinSession).not.toHaveBeenCalled();
+    expect(socket.connectCalls).toBe(0);
+    expect(screen.getByText(/game ended/i)).toBeTruthy();
+  });
+
+  it("shows the modal when the deadline passes while connected", async () => {
+    renderGame();
+    await waitForSocketEffect(socket);
+    await act(async () => socket.serverConnect());
+
+    await act(async () => socket.fire("game_ended"));
+
+    expect(screen.getByText(/game ended/i)).toBeTruthy();
+  });
+});

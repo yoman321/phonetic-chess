@@ -22,8 +22,9 @@ from controller_operations.helpers import (
     status_from_board,
 )
 from controller_operations.llm import pick_move_with_llm
-from controller_operations.presence import schedule_cleanup
+from controller_operations.presence import IDLE_TTL_SECONDS
 from error_logger import logger
+from queries import connections as connections_q
 from queries import moves as moves_q
 from queries import sessions as sessions_q
 
@@ -46,7 +47,8 @@ def create_session(db, requested_color):
                 row = sessions_q.insert_session(cur, sid, START_FEN, color, token)
             except psycopg.errors.UniqueViolation:
                 continue
-            schedule_cleanup(sid)
+            # Nothing is scheduled: created_at defaults to NOW(), so a game
+            # nobody opens passes its deadline on that alone.
             return {**row, "color": color, "playerToken": token}
     logger.error("create_session: could_not_allocate_session_id after 5 attempts")
     raise ApiError("could_not_allocate_session_id", 500)
@@ -54,7 +56,7 @@ def create_session(db, requested_color):
 
 def get_session(db, sid):
     with db() as pg, pg.cursor() as cur:
-        row = sessions_q.select_session_summary(cur, sid)
+        row = sessions_q.select_session_summary(cur, sid, IDLE_TTL_SECONDS)
     if not row:
         logger.error("get_session: not_found sid=%s", sid)
         raise ApiError("not_found", 404)
@@ -70,6 +72,12 @@ def join_session(db, socketio, sid, existing_token):
         if not row:
             logger.error("join_session: not_found sid=%s", sid)
             raise ApiError("not_found", 404)
+
+        # Before the returning-player branch: a returning player and a new
+        # joiner are refused alike once the deadline has passed.
+        if connections_q.is_idle(cur, sid, IDLE_TTL_SECONDS):
+            logger.error("join_session: game_ended sid=%s", sid)
+            raise ApiError("game_ended", 410)
 
         # The guard matters: a None token compares equal to a NULL column and
         # would hand a joiner a colour they never claimed.
@@ -132,6 +140,12 @@ def make_move(db, socketio, sid, uci, token):
         if not row:
             logger.error("make_move: not_found sid=%s", sid)
             raise ApiError("not_found", 404)
+        # Ahead of game_over: a game past its deadline is unreachable however it
+        # finished, so the deadline is the more useful answer. Evaluated under
+        # the row lock, so it is consistent with the state validated below.
+        if connections_q.is_idle(cur, sid, IDLE_TTL_SECONDS):
+            logger.error("make_move: game_ended sid=%s", sid)
+            raise ApiError("game_ended", 410)
         if row["status"] != "active":
             logger.error("make_move: game_over sid=%s status=%s", sid, row["status"])
             raise ApiError("game_over", 409, status=row["status"])
@@ -194,6 +208,12 @@ def say_move(db, socketio, sid, text, token):
         if not row:
             logger.error("say_move: not_found sid=%s", sid)
             raise ApiError("not_found", 404)
+        # Ahead of game_over: a game past its deadline is unreachable however it
+        # finished, so the deadline is the more useful answer. Evaluated under
+        # the row lock, so it is consistent with the state validated below.
+        if connections_q.is_idle(cur, sid, IDLE_TTL_SECONDS):
+            logger.error("say_move: game_ended sid=%s", sid)
+            raise ApiError("game_ended", 410)
         if row["status"] != "active":
             logger.error("say_move: game_over sid=%s status=%s", sid, row["status"])
             raise ApiError("game_over", 409, status=row["status"])

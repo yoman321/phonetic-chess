@@ -16,7 +16,10 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # The factory, not a connection: every operation opens and closes its own.
 presence.init(db.connect)
-presence.reschedule_existing_sessions()
+# Sockets do not outlive the process that held them, so every connection row
+# is stale at startup. Single-process by construction: a second worker
+# starting would clear the first's connections.
+presence.clear_connections()
 
 app.register_blueprint(make_sessions_bp(db.connect, socketio))
 register_sockets(socketio)
