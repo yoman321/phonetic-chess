@@ -21,12 +21,27 @@ from controller_operations.helpers import (
     room_name,
     status_from_board,
 )
-from controller_operations.llm import pick_move_with_llm
+from controller_operations.llm import CallLog, pick_move_with_llm
 from controller_operations.presence import IDLE_TTL_SECONDS
 from error_logger import logger
 from queries import connections as connections_q
+from queries import llm_calls as llm_calls_q
 from queries import moves as moves_q
 from queries import sessions as sessions_q
+
+
+def _persist_call_log(db, call_log):
+    """Write one complete log atomically, without affecting the move path."""
+    if call_log is None or not call_log.attempt_rows:
+        return
+    try:
+        with db() as pg, pg.transaction(), pg.cursor() as cur:
+            call_id = llm_calls_q.insert_call(cur, call_log.call_record())
+            llm_calls_q.insert_attempts(cur, call_id, call_log.attempt_rows)
+    except Exception:
+        logger.exception(
+            "say_move: could_not_persist_llm_call sid=%s", call_log.session_id
+        )
 
 
 def create_session(db, requested_color):
@@ -203,119 +218,139 @@ def say_move(db, socketio, sid, text, token):
         logger.error("say_move: missing_token sid=%s", sid)
         raise ApiError("missing_token", 401)
 
-    with db() as pg, pg.transaction(), pg.cursor() as cur:
-        row = sessions_q.select_state_for_update(cur, sid)
-        if not row:
-            logger.error("say_move: not_found sid=%s", sid)
-            raise ApiError("not_found", 404)
-        # Ahead of game_over: a game past its deadline is unreachable however it
-        # finished, so the deadline is the more useful answer. Evaluated under
-        # the row lock, so it is consistent with the state validated below.
-        if connections_q.is_idle(cur, sid, IDLE_TTL_SECONDS):
-            logger.error("say_move: game_ended sid=%s", sid)
-            raise ApiError("game_ended", 410)
-        if row["status"] != "active":
-            logger.error("say_move: game_over sid=%s status=%s", sid, row["status"])
-            raise ApiError("game_over", 409, status=row["status"])
-        if not row["white_token"] or not row["black_token"]:
-            logger.info("say_move: waiting_for_opponent_join sid=%s", sid)
-            raise ApiError("waiting_for_opponent_join", 409)
-
-        if token == row["white_token"]:
-            my_color = chess.WHITE
-        elif token == row["black_token"]:
-            my_color = chess.BLACK
-        else:
-            logger.error("say_move: not_a_player sid=%s", sid)
-            raise ApiError("not_a_player", 403)
-
-        prior_row = moves_q.select_last_move(cur, sid)
-
-        if prior_row is None:
-            # Game just started — only white can make the first move.
-            if my_color != chess.WHITE:
+    call_log = None
+    try:
+        with db() as pg, pg.transaction(), pg.cursor() as cur:
+            row = sessions_q.select_state_for_update(cur, sid)
+            if not row:
+                logger.error("say_move: not_found sid=%s", sid)
+                raise ApiError("not_found", 404)
+            # Ahead of game_over: a game past its deadline is unreachable however it
+            # finished, so the deadline is the more useful answer. Evaluated under
+            # the row lock, so it is consistent with the state validated below.
+            if connections_q.is_idle(cur, sid, IDLE_TTL_SECONDS):
+                logger.error("say_move: game_ended sid=%s", sid)
+                raise ApiError("game_ended", 410)
+            if row["status"] != "active":
                 logger.error(
-                    "say_move: waiting_for_opponent_move sid=%s (no prior moves)", sid,
+                    "say_move: game_over sid=%s status=%s", sid, row["status"]
                 )
-                raise ApiError("waiting_for_opponent_move", 409)
-        else:
-            last_mover = chess.WHITE if prior_row["ply"] % 2 == 1 else chess.BLACK
-            if last_mover == my_color:
-                logger.error("say_move: waiting_for_opponent_move sid=%s", sid)
-                raise ApiError("waiting_for_opponent_move", 409)
+                raise ApiError("game_over", 409, status=row["status"])
+            if not row["white_token"] or not row["black_token"]:
+                logger.info("say_move: waiting_for_opponent_join sid=%s", sid)
+                raise ApiError("waiting_for_opponent_join", 409)
 
-        board = chess.Board(row["fen"])
-        if my_color != board.turn:
-            logger.error("say_move: not_your_turn sid=%s", sid)
-            raise ApiError("not_your_turn", 403)
+            if token == row["white_token"]:
+                my_color = chess.WHITE
+            elif token == row["black_token"]:
+                my_color = chess.BLACK
+            else:
+                logger.error("say_move: not_a_player sid=%s", sid)
+                raise ApiError("not_a_player", 403)
 
-        candidates = rank_moves(board)
-        if not candidates:
-            logger.error("say_move: no_legal_moves sid=%s fen=%s", sid, row["fen"])
-            raise ApiError("no_legal_moves", 409)
-        all_legal_ucis = {m.uci() for m in board.legal_moves}
+            prior_row = moves_q.select_last_move(cur, sid)
 
-        if prior_row:
-            last_move = (prior_row["uci"], prior_row["san"])
-            prior_tone = prior_row["tone_summary"] or ""
-        else:
-            last_move = None
-            prior_tone = ""
+            if prior_row is None:
+                # Game just started — only white can make the first move.
+                if my_color != chess.WHITE:
+                    logger.error(
+                        "say_move: waiting_for_opponent_move sid=%s (no prior moves)",
+                        sid,
+                    )
+                    raise ApiError("waiting_for_opponent_move", 409)
+            else:
+                last_mover = (
+                    chess.WHITE if prior_row["ply"] % 2 == 1 else chess.BLACK
+                )
+                if last_mover == my_color:
+                    logger.error("say_move: waiting_for_opponent_move sid=%s", sid)
+                    raise ApiError("waiting_for_opponent_move", 409)
 
-        player_side = "white" if my_color == chess.WHITE else "black"
-        socketio.emit(
-            "thinking",
-            {"on": True, "side": player_side, "status": "thinking"},
-            to=room_name(sid),
-        )
+            board = chess.Board(row["fen"])
+            if my_color != board.turn:
+                logger.error("say_move: not_your_turn sid=%s", sid)
+                raise ApiError("not_your_turn", 403)
 
-        # Everything from here to the end of the transaction runs under a
-        # finally, so no exception type — mapped, unmapped, or raised by the
-        # write — can leave the mover's indicator spinning and their input
-        # disabled. Do not restore the per-except emits: two `on:false` on the
-        # mapped paths breaks the same invariant from the other side.
-        try:
-            def _on_llm_retry(attempt):
+            candidates = rank_moves(board)
+            if not candidates:
+                logger.error(
+                    "say_move: no_legal_moves sid=%s fen=%s", sid, row["fen"]
+                )
+                raise ApiError("no_legal_moves", 409)
+            all_legal_ucis = {m.uci() for m in board.legal_moves}
+
+            if prior_row:
+                last_move = (prior_row["uci"], prior_row["san"])
+                prior_tone = prior_row["tone_summary"] or ""
+            else:
+                last_move = None
+                prior_tone = ""
+
+            player_side = "white" if my_color == chess.WHITE else "black"
+            socketio.emit(
+                "thinking",
+                {"on": True, "side": player_side, "status": "thinking"},
+                to=room_name(sid),
+            )
+
+            # Everything from here to the end of the transaction runs under a
+            # finally, so no exception type — mapped, unmapped, or raised by the
+            # write — can leave the mover's indicator spinning and their input
+            # disabled. Do not restore the per-except emits: two `on:false` on the
+            # mapped paths breaks the same invariant from the other side.
+            try:
+                def _on_llm_retry(attempt):
+                    socketio.emit(
+                        "thinking",
+                        {
+                            "on": True,
+                            "side": player_side,
+                            "status": "retrying",
+                            "attempt": attempt,
+                        },
+                        to=room_name(sid),
+                    )
+
+                call_log = CallLog(
+                    sid, board.ply() + 1, row["fen"], text, candidates, prior_tone
+                )
+                try:
+                    chosen_uci, tone_summary, intent, rationale = pick_move_with_llm(
+                        text, row["fen"], candidates, prior_tone, last_move,
+                        valid_ucis=all_legal_ucis,
+                        on_retry=_on_llm_retry,
+                        log=call_log,
+                    )
+                except (urllib.error.URLError, TimeoutError) as e:
+                    logger.exception("say_move: llm_unavailable sid=%s", sid)
+                    raise ApiError("llm_unavailable", 502, detail=str(e))
+                except (ValueError, json.JSONDecodeError, KeyError) as e:
+                    logger.exception("say_move: llm_bad_response sid=%s", sid)
+                    raise ApiError("llm_bad_response", 502, detail=str(e))
+
+                move = chess.Move.from_uci(chosen_uci)
+                san = board.san(move)
+                board.push(move)
+                ply = board.ply()
+                new_fen = board.fen()
+                new_pgn = append_pgn(row["pgn"], ply, san)
+                new_status = status_from_board(board)
+
+                sessions_q.update_after_move(cur, sid, new_fen, new_pgn, new_status)
+                moves_q.insert_move(
+                    cur, sid, ply, chosen_uci, san, tone_summary or None
+                )
+            finally:
+                # On success this fires inside the transaction, before the `move`
+                # event at the end. Harmless: the client clears thinkingSide on both.
                 socketio.emit(
-                    "thinking",
-                    {
-                        "on": True,
-                        "side": player_side,
-                        "status": "retrying",
-                        "attempt": attempt,
-                    },
+                    "thinking", {"on": False, "side": player_side},
                     to=room_name(sid),
                 )
-
-            try:
-                chosen_uci, tone_summary, intent, rationale = pick_move_with_llm(
-                    text, row["fen"], candidates, prior_tone, last_move,
-                    valid_ucis=all_legal_ucis,
-                    on_retry=_on_llm_retry,
-                )
-            except (urllib.error.URLError, TimeoutError) as e:
-                logger.exception("say_move: llm_unavailable sid=%s", sid)
-                raise ApiError("llm_unavailable", 502, detail=str(e))
-            except (ValueError, json.JSONDecodeError, KeyError) as e:
-                logger.exception("say_move: llm_bad_response sid=%s", sid)
-                raise ApiError("llm_bad_response", 502, detail=str(e))
-
-            move = chess.Move.from_uci(chosen_uci)
-            san = board.san(move)
-            board.push(move)
-            ply = board.ply()
-            new_fen = board.fen()
-            new_pgn = append_pgn(row["pgn"], ply, san)
-            new_status = status_from_board(board)
-
-            sessions_q.update_after_move(cur, sid, new_fen, new_pgn, new_status)
-            moves_q.insert_move(cur, sid, ply, chosen_uci, san, tone_summary or None)
-        finally:
-            # On success this fires inside the transaction, before the `move`
-            # event at the end. Harmless: the client clears thinkingSide on both.
-            socketio.emit(
-                "thinking", {"on": False, "side": player_side}, to=room_name(sid)
-            )
+    finally:
+        # The move transaction has committed or rolled back and released its
+        # connection before this best-effort, independently atomic write begins.
+        _persist_call_log(db, call_log)
 
     payload = {
         "fen": new_fen,

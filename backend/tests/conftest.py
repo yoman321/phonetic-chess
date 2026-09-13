@@ -99,7 +99,13 @@ class FakeCursor:
         self.executed.append((collapsed, params))
         if self.fail_on and self.fail_on in collapsed:
             raise RuntimeError(f"database write failed: {self.fail_on}")
-        if "AS idle" in collapsed:
+        if "INSERT INTO llm_calls" in collapsed:
+            # The sixth shape. `insert_call` reads `RETURNING id`, so without
+            # this branch it reads None["id"] and every fast-tier say_move
+            # raises TypeError from the logging path rather than from anything
+            # the test is about.
+            self._result = {"id": 1}
+        elif "AS idle" in collapsed:
             # The idle predicate. These fakes describe a game someone is playing,
             # so it is never idle; the deadline is asserted against a real
             # database in the integration tier, where the clock is real.
@@ -110,6 +116,10 @@ class FakeCursor:
             self._result = self.last_move_row
         else:
             self._result = None
+
+    def executemany(self, sql, params_seq):
+        for params in params_seq:
+            self.execute(sql, params)
 
     def fetchone(self):
         return self._result

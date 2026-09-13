@@ -38,6 +38,9 @@ per-move engine cost is negligible next to the network call.
    rationale.
 4. The move is applied, persisted, and broadcast to both players over WebSockets;
    the opponent sees a "?" popover explaining the intent behind the move.
+5. Every LLM call is logged to Postgres — what was asked, what came back, each
+   retry and why it failed, latency and token counts. Metrics come out of a
+   `llm_call_metrics` view; there is no dashboard and no endpoint, just SQL.
 
 The candidate list is advisory — the model may pick any legal move — so it can
 choose a slightly "off" move when that better fits an unusual tone, while the
@@ -89,10 +92,11 @@ database and nothing else. For a database that already has data:
 psql "$DATABASE_URL" -f backend/schema.sql
 ```
 
-`schema.sql` is written to be safe to re-run. It is additive with one exception:
-the `sessions_status_check` constraint is dropped and re-added on every run, since
-`CREATE TABLE IF NOT EXISTS` cannot narrow a constraint on a table that already
-exists. Nothing else alters or removes.
+`schema.sql` is safe to re-run and keeps existing data. Tables and indexes are
+only ever added. Constraints, functions, triggers and the `llm_call_metrics` view
+are recreated each run, since `CREATE TABLE IF NOT EXISTS` cannot update them —
+so the view is briefly absent mid-run and a query against it right then will
+fail.
 
 ## Tests
 

@@ -63,3 +63,98 @@ DROP TRIGGER IF EXISTS trg_session_last_disconnect ON session_connections;
 CREATE TRIGGER trg_session_last_disconnect
     AFTER DELETE ON session_connections
     FOR EACH ROW EXECUTE FUNCTION session_mark_last_disconnect();
+
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id                BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    session_id        TEXT        NOT NULL,
+    ply               INTEGER     NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    model             TEXT        NOT NULL,
+    reasoning_effort  TEXT        NOT NULL,
+    max_retries       INTEGER     NOT NULL,
+    sdk_max_retries   INTEGER     NOT NULL,
+    fen               TEXT        NOT NULL,
+    player_text       TEXT        NOT NULL,
+    candidate_ucis    TEXT[]      NOT NULL,
+    prior_tone        TEXT,
+    outcome           TEXT        NOT NULL
+                                  CHECK (outcome IN ('ok', 'exhausted', 'transport',
+                                                     'unexpected')),
+    attempts          INTEGER     NOT NULL,
+    latency_ms        INTEGER     NOT NULL,
+    chosen_uci        TEXT,
+    off_list          BOOLEAN,
+    intent            TEXT,
+    rationale         TEXT,
+    tone_summary      TEXT
+);
+
+-- CREATE TABLE IF NOT EXISTS leaves the old CHECK in place on an existing
+-- database. Replace it so reapplying this file also migrates live tables.
+ALTER TABLE llm_calls DROP CONSTRAINT IF EXISTS llm_calls_outcome_check;
+ALTER TABLE llm_calls ADD CONSTRAINT llm_calls_outcome_check
+    CHECK (outcome IN ('ok', 'exhausted', 'transport', 'unexpected'));
+
+CREATE INDEX IF NOT EXISTS idx_llm_calls_session
+    ON llm_calls(session_id, ply);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_created
+    ON llm_calls(created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_outcome
+    ON llm_calls(outcome);
+
+CREATE TABLE IF NOT EXISTS llm_call_attempts (
+    call_id            BIGINT      NOT NULL
+                                   REFERENCES llm_calls(id) ON DELETE CASCADE,
+    attempt            INTEGER     NOT NULL,
+    outcome            TEXT        NOT NULL
+                                   CHECK (outcome IN ('ok', 'bad_json',
+                                                      'missing_key', 'invalid_uci',
+                                                      'bad_shape', 'transport',
+                                                      'unexpected')),
+    latency_ms         INTEGER     NOT NULL,
+    sdk_retries        INTEGER,
+    status_code        INTEGER,
+    raw_content        TEXT,
+    error_detail       TEXT,
+    prompt_tokens      INTEGER,
+    completion_tokens  INTEGER,
+    reasoning_tokens   INTEGER,
+    PRIMARY KEY (call_id, attempt)
+);
+
+ALTER TABLE llm_call_attempts
+    DROP CONSTRAINT IF EXISTS llm_call_attempts_outcome_check;
+ALTER TABLE llm_call_attempts ADD CONSTRAINT llm_call_attempts_outcome_check
+    CHECK (outcome IN ('ok', 'bad_json', 'missing_key', 'invalid_uci',
+                       'bad_shape', 'transport', 'unexpected'));
+
+DROP VIEW IF EXISTS llm_call_metrics;
+CREATE VIEW llm_call_metrics AS
+SELECT
+    date_trunc('day', c.created_at)                           AS day,
+    c.model,
+    count(*)                                                  AS calls,
+    count(*) FILTER (WHERE c.outcome = 'ok')                  AS ok,
+    count(*) FILTER (WHERE c.outcome = 'exhausted')           AS exhausted,
+    count(*) FILTER (WHERE c.outcome = 'transport')           AS transport,
+    count(*) FILTER (WHERE c.outcome = 'unexpected')          AS unexpected,
+    count(*) FILTER (WHERE c.attempts > 1)                    AS needed_a_retry,
+    sum(c.attempts)                                           AS loop_attempts,
+    sum(a.http_requests)                                      AS http_requests,
+    count(*) FILTER (WHERE c.off_list)                        AS off_list,
+    percentile_cont(0.5) WITHIN GROUP (ORDER BY c.latency_ms) AS p50_ms,
+    percentile_cont(0.95) WITHIN GROUP (ORDER BY c.latency_ms) AS p95_ms,
+    sum(a.prompt_tokens)                                      AS prompt_tokens,
+    sum(a.completion_tokens)                                  AS completion_tokens,
+    sum(a.reasoning_tokens)                                   AS reasoning_tokens
+FROM llm_calls c
+JOIN LATERAL (
+    SELECT
+        sum(1 + COALESCE(t.sdk_retries, c.sdk_max_retries)) AS http_requests,
+        sum(t.prompt_tokens)                                 AS prompt_tokens,
+        sum(t.completion_tokens)                             AS completion_tokens,
+        sum(t.reasoning_tokens)                              AS reasoning_tokens
+    FROM llm_call_attempts t
+    WHERE t.call_id = c.id
+) a ON TRUE
+GROUP BY 1, 2;

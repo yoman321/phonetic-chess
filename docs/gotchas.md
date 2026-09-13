@@ -13,6 +13,12 @@ Known issues, symptom → fix. Delete an entry once its cause is fixed.
   `load_dotenv()` runs once at import and the reloader watches only `.py` files.
   A stale `GROQ_API_KEY` reaches the browser as "Phrase rejected: Failed to
   fetch": the uncaught 401 is rendered by the debugger, which sets no CORS header.
+- A fast-tier test monkeypatches `pick_move_with_llm`, the move succeeds, and no
+  `llm_calls` row is written → the fake ignores the `log=` keyword, so the
+  `CallLog` has no attempts and `_persist_call_log` correctly declines to write
+  an empty record. Intended: most fakes should ignore it. A test that means to
+  reach the write must fill the log — `log.add_attempt(...)` and `log.finish(...)`
+  — or it silently asserts nothing.
 
 Removed 2026-09-09, cause fixed by Phase 4 of `plans/live-game-integrity.md`
 (one connection per operation): rows left behind by an operation still holding a

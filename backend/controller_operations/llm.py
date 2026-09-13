@@ -2,7 +2,7 @@ import json
 import os
 import time
 
-from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from error_logger import logger
 
@@ -20,6 +20,7 @@ LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "none")
 LLM_MAX_RETRIES = min(int(os.environ.get("LLM_MAX_RETRIES", "3")), 3)
 LLM_BACKOFF_BASE = float(os.environ.get("LLM_BACKOFF_BASE", "0.5"))
+SDK_MAX_RETRIES = 3
 
 # max_retries=3: SDK retries 429s, connection errors, and timeouts with
 # exponential backoff (honoring Retry-After when present). After 3 failed
@@ -29,13 +30,111 @@ _client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url=GROQ_BASE_URL,
     timeout=LLM_TIMEOUT,
-    max_retries=3,
+    max_retries=SDK_MAX_RETRIES,
 )
+
+
+class _BadShapeError(ValueError):
+    pass
+
+
+class CallLog:
+    """The database-free record of one invocation and all its attempts."""
+
+    def __init__(self, session_id, ply, fen, player_text, candidates, prior_tone):
+        self.session_id = session_id
+        self.ply = ply
+        self.model = LLM_MODEL
+        self.reasoning_effort = LLM_REASONING_EFFORT
+        self.max_retries = LLM_MAX_RETRIES
+        if not hasattr(_client, "max_retries"):
+            # Small compatible client seams may omit configuration attributes.
+            _client.max_retries = SDK_MAX_RETRIES
+        self.sdk_max_retries = _client.max_retries
+        self.fen = fen
+        self.player_text = player_text
+        self.candidate_ucis = [uci for uci, _san in candidates]
+        self.prior_tone = prior_tone or None
+        self.attempt_rows = []
+        self.outcome = "unexpected"
+        self.chosen_uci = None
+        self.off_list = None
+        self.intent = None
+        self.rationale = None
+        self.tone_summary = None
+        self._started_at = time.monotonic()
+        self.latency_ms = 0
+
+    def add_attempt(
+        self, attempt, outcome, started_at, sdk_retries=None, status_code=None,
+        raw_content=None, error_detail=None, usage=None,
+    ):
+        details = usage.completion_tokens_details if usage is not None else None
+        self.attempt_rows.append({
+            "attempt": attempt,
+            "outcome": outcome,
+            "latency_ms": int((time.monotonic() - started_at) * 1000),
+            "sdk_retries": sdk_retries,
+            "status_code": status_code,
+            "raw_content": raw_content,
+            "error_detail": error_detail,
+            "prompt_tokens": usage.prompt_tokens if usage is not None else None,
+            "completion_tokens": (
+                usage.completion_tokens if usage is not None else None
+            ),
+            "reasoning_tokens": (
+                details.reasoning_tokens if details is not None else None
+            ),
+        })
+
+    def finish(
+        self, outcome, chosen_uci=None, off_list=None, intent=None,
+        rationale=None, tone_summary=None,
+    ):
+        self.outcome = outcome
+        self.chosen_uci = chosen_uci
+        self.off_list = off_list
+        self.intent = intent
+        self.rationale = rationale
+        self.tone_summary = tone_summary
+        self.latency_ms = int((time.monotonic() - self._started_at) * 1000)
+
+    def call_record(self):
+        return {
+            "session_id": self.session_id,
+            "ply": self.ply,
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "max_retries": self.max_retries,
+            "sdk_max_retries": self.sdk_max_retries,
+            "fen": self.fen,
+            "player_text": self.player_text,
+            "candidate_ucis": self.candidate_ucis,
+            "prior_tone": self.prior_tone,
+            "outcome": self.outcome,
+            "attempts": len(self.attempt_rows),
+            "latency_ms": self.latency_ms,
+            "chosen_uci": self.chosen_uci,
+            "off_list": self.off_list,
+            "intent": self.intent,
+            "rationale": self.rationale,
+            "tone_summary": self.tone_summary,
+        }
+
+
+def _content_outcome(exc):
+    if isinstance(exc, json.JSONDecodeError):
+        return "bad_json"
+    if isinstance(exc, KeyError):
+        return "missing_key"
+    if isinstance(exc, _BadShapeError):
+        return "bad_shape"
+    return "invalid_uci"
 
 
 def pick_move_with_llm(
     text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None,
-    on_retry=None,
+    on_retry=None, log=None,
 ):
     """Ask Groq to pick a UCI and emit an updated tone summary.
 
@@ -89,10 +188,13 @@ def pick_move_with_llm(
     )
 
     last_err = None
-    last_content = None
     for attempt in range(LLM_MAX_RETRIES):
+        attempt_started = time.monotonic()
+        content = None
+        sdk_retries = None
+        usage = None
         try:
-            resp = _client.chat.completions.create(
+            raw = _client.chat.completions.with_raw_response.create(
                 model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system},
@@ -109,8 +211,14 @@ def pick_move_with_llm(
                     "reasoning_format": "hidden",
                 },
             )
+            sdk_retries = raw.retries_taken
+            resp = raw.parse()
+            usage = resp.usage
+            if not resp.choices:
+                raise _BadShapeError("llm response contained no choices")
             content = resp.choices[0].message.content
-            last_content = content
+            if content is None:
+                raise _BadShapeError("llm response contained no message content")
             parsed = json.loads(content)
             uci = (parsed.get("uci") or "").strip()
             tone_summary = (parsed.get("tone_summary") or "").strip()
@@ -118,22 +226,67 @@ def pick_move_with_llm(
             rationale = (parsed.get("rationale") or "").strip()
             if uci not in valid_ucis:
                 raise ValueError(f"llm returned invalid uci: {uci!r}")
+            off_list = uci not in {u for u, _ in candidates}
+            if log is not None:
+                log.add_attempt(
+                    attempt + 1, "ok", attempt_started,
+                    sdk_retries=sdk_retries, raw_content=content, usage=usage,
+                )
+                log.finish(
+                    "ok", chosen_uci=uci, off_list=off_list, intent=intent,
+                    rationale=rationale, tone_summary=tone_summary,
+                )
             logger.info(
                 "[llm] attempt %d/%d ok  uci=%s off_list=%s",
-                attempt + 1, LLM_MAX_RETRIES, uci,
-                uci not in {u for u, _ in candidates},
+                attempt + 1, LLM_MAX_RETRIES, uci, off_list,
             )
             return uci, tone_summary, intent, rationale
-        except (APIConnectionError, APITimeoutError, RateLimitError) as e:
+        except (APIConnectionError, APITimeoutError, APIStatusError) as e:
             # SDK already retried 3 times — surface as TimeoutError so the
             # caller's (URLError, TimeoutError) handler maps it to the
             # llm_unavailable ApiError the frontend knows how to display.
+            if log is not None:
+                log.add_attempt(
+                    attempt + 1, "transport", attempt_started,
+                    status_code=getattr(e, "status_code", None),
+                    error_detail=f"{type(e).__name__}: {e}",
+                )
+                log.finish("transport")
             raise TimeoutError(str(e)) from e
-        except (ValueError, json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError, _BadShapeError, ValueError) as e:
             last_err = e
+            if log is not None:
+                log.add_attempt(
+                    attempt + 1, _content_outcome(e), attempt_started,
+                    sdk_retries=sdk_retries, raw_content=content,
+                    error_detail=f"{type(e).__name__}: {e}", usage=usage,
+                )
             logger.info(
                 "[llm] attempt %d/%d fail %s: %s  raw=%r",
-                attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, last_content,
+                attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e, content,
+            )
+            if attempt + 1 < LLM_MAX_RETRIES:
+                if on_retry is not None:
+                    try:
+                        on_retry(attempt + 1)
+                    except Exception:
+                        logger.exception("[llm] on_retry callback raised")
+                time.sleep(LLM_BACKOFF_BASE * (2 ** attempt))
+        except Exception as e:
+            # Keep unrecognised endings observable without assuming their reply
+            # content is safe to retain. They follow the content-failure retry
+            # path and become ValueError at exhaustion so the caller preserves
+            # its existing llm_bad_response mapping.
+            last_err = ValueError(str(e))
+            if log is not None:
+                log.add_attempt(
+                    attempt + 1, "unexpected", attempt_started,
+                    sdk_retries=sdk_retries,
+                    error_detail=f"{type(e).__name__}: {e}", usage=usage,
+                )
+            logger.info(
+                "[llm] attempt %d/%d fail %s: %s  raw=None",
+                attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e,
             )
             if attempt + 1 < LLM_MAX_RETRIES:
                 if on_retry is not None:
@@ -146,4 +299,6 @@ def pick_move_with_llm(
         "[llm] giving up after %d attempts; last_err=%s: %s",
         LLM_MAX_RETRIES, type(last_err).__name__, last_err,
     )
+    if log is not None:
+        log.finish("exhausted")
     raise last_err
