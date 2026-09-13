@@ -95,7 +95,7 @@ lifecycle.
 
 **sessions** — one row per game.
 `id` (8-char base36 PK), `fen`, `pgn`, `white_token`, `black_token`,
-`status` CHECK-constrained to `active | white_won | black_won | draw | abandoned`,
+`status` CHECK-constrained to `active | white_won | black_won | draw`,
 `created_at`, `updated_at`, `last_disconnected_at`. Indexed on `updated_at`.
 `last_disconnected_at` is written only by the trigger below and is NULL for a game
 no socket has ever left.
@@ -281,9 +281,11 @@ foreign key by taking `FOR KEY SHARE` on the parent row, which `FOR UPDATE` bloc
 `FOR NO KEY UPDATE` still conflicts with itself, so mover-versus-mover exclusion is
 unchanged.
 
-The `abandoned` status in the schema is never written: ended-ness is computed, never
-stored, and no game is deleted either. It was considered here and deliberately left
-as a dead value in the CHECK constraint.
+There is no `abandoned` status: ended-ness is computed, never stored, and no game is
+deleted either. The value was carried in the CHECK constraint as a dead option for a
+while and removed on 2026-09-13, once nothing had ever written it. `schema.sql`
+narrows the constraint with an explicit drop-and-add, because
+`CREATE TABLE IF NOT EXISTS` cannot alter a table that already exists.
 
 ---
 
@@ -324,7 +326,7 @@ chat message.
 read per connection by `db.py` and is force-overridden in compose to point at the
 `db` service, so the value in `backend/.env` is ignored under Docker.
 
-Optional: `GROQ_BASE_URL`, `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_TIMEOUT`
+Optional: `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_TIMEOUT`
 (30), `LLM_REASONING_EFFORT` (`none` — thinking is off by default because reasoning
 tokens bill as output and every move is one latency-sensitive call; set to `default`
 to enable), `LLM_MAX_RETRIES` (3, hard-capped at 3), `LLM_BACKOFF_BASE` (0.5),

@@ -1,17 +1,142 @@
 # AGENTS.md
 
-Read fully before writing code.
+Follow literally. Ambiguous → stop and ask. Never infer intent.
 
-## Files
+## 0. Session start
 
-- `AGENTS.md` — these rules.
-- `plans/<feature>.md` — spec for the current work.
-- `handoff.md` — where the work stands, next step. Overwritten each session.
-- `BACKLOG.md` — work not yet started.
-- `README.md` — human setup.
-- `docs/gotchas.md` — known issues, symptom → fix. Read it if it exists. Delete entries whose cause is fixed.
+1. Read `AGENTS.md`, `handoff.md`.
+2. Identify your role from the prompt. Not stated → STOP.
+3. Read your role's `reads`. Check `requires`. Unmet → STOP.
+4. Record the current commit sha as `base`.
+5. One role per session. Never take two.
 
-## Commands
+## 1. Roles
+
+### Plan
+```
+model:    opus-5
+requires: —
+reads:    AGENTS.md, handoff.md, code
+writes:   plans/<feature>.md § spec
+done:     every invariant stated; phases numbered; Status: draft
+```
+
+### Grade the plan
+```
+model:    sol            # must differ from the plan's provenance model
+requires: Status: draft
+reads:    plans/<feature>.md, code
+writes:   plans/<feature>.md § "## Plan review"
+done:     section replaced whole; Status set to reviewed
+```
+
+### Write the gates
+```
+model:    opus-5
+requires: Status: frozen
+reads:    plans/<feature>.md
+writes:   tests only
+done:     every gate run and observed failing for missing behavior
+```
+
+### Build
+```
+model:    sol
+requires: Status: frozen, gates failing
+reads:    plans/<feature>.md, tests
+writes:   code
+done:     phase gates green; §7 passes
+```
+
+### Review the build
+```
+model:    opus-5         # must differ from the build's provenance model
+requires: §7 passes
+reads:    plans/<feature>.md, diff vs base recorded by Build
+writes:   plans/<feature>.md § "## Build review"
+done:     section replaced whole
+```
+
+Rules:
+- Every session rewrites `handoff.md` whole before ending. Never append.
+- Write all output to disk before the session ends.
+- Build one phase at a time. Stop at the phase boundary.
+- One feature, one active session. Two sessions never write one file.
+- Grading sessions replace only their own section. Every other line stays byte-identical.
+
+## 2. STOP conditions
+
+Stop. Rewrite `handoff.md`. Report. Do not push through.
+
+```
+plan Status ≠ role requires          → STOP, name the status found
+provenance model == your model       → STOP, do not grade your own output
+3 turns, no gate changed state       → STOP, name what you tried and observed
+gate is wrong                        → STOP, never edit a gate
+gate passes before work exists       → STOP, report as plan defect
+plan is wrong                        → STOP, never work around it
+product decision needed              → STOP, state options, do not pick
+about to write outside role.writes   → STOP
+```
+
+## 3. Files
+
+```
+AGENTS.md            these rules
+plans/<feature>.md   spec + plan review + build review. One file per feature.
+handoff.md           state, next step. Rewritten whole each session.
+BACKLOG.md           not started. Out-of-scope findings go under "Found while working".
+README.md            human setup
+docs/gotchas.md      symptom → fix, one line each. Delete entries whose cause is fixed.
+```
+
+## 4. Formats
+
+Provenance — first line of every write to `plans/<feature>.md` and `handoff.md`:
+```
+<!-- role: <role> | model: <model-id> | base: <sha> | date: <YYYY-MM-DD> -->
+```
+
+`plans/<feature>.md` header:
+```
+<!-- provenance -->
+Status: draft | reviewed | frozen
+Phases: <n>
+```
+```
+draft     Plan is writing. Nothing downstream may read it.
+reviewed  A grading session wrote "## Plan review". Findings open.
+frozen    Human resolved every finding and set this. ONLY A HUMAN SETS frozen.
+          Requires zero [open] findings.
+```
+
+Finding — one per line, both review sections:
+```
+- [open] high — src/auth/session.ts:42 — refresh races the revoke check, so a revoked token survives one cycle — take the lock before the read
+  [state] [severity] — [file:line] — [why it breaks] — [smallest fix]
+```
+```
+state:     [open] → [accepted] | [rejected]. ONLY A HUMAN CHANGES STATE.
+severity:  high = breaks an invariant | med = breaks under a stated condition | low = cost, clarity, drift
+forbidden: praise, summary of the artifact, acting on a finding, resolving your own
+```
+
+`handoff.md` — exact shape, every session:
+```
+# Handoff
+<!-- provenance -->
+
+Feature:  <name>          Plan: plans/<name>.md      Status: <draft|reviewed|frozen>
+Phase:    <n> of <m> — <name>
+
+State:    <done / half-done, 2-3 lines>
+Next:     <single next action, startable from cold>
+Blocked:  <none | what, and what unblocks it>
+Gates:    <pass>/<total>. Failing: <names> + pasted output
+Verified: <commands run> → <results>
+```
+
+## 5. Commands
 
 Each half is a subshell: chaining bare `cd`s would resolve the second relative
 to the first.
@@ -35,7 +160,7 @@ backend/scripts/testdb.sh down
 (cd backend && .venv/bin/pytest -q tests/test_say_move_indicator.py::test_indicator_clears_on_success)
 (cd frontend && npm test -- -t "emits join_session on every connect")
 
-# <typecheck>     none configured — see below
+# <typecheck>     none configured — see §7
 # <lint>
 (cd frontend && npm run lint)
 
@@ -43,126 +168,107 @@ backend/scripts/testdb.sh down
 (cd frontend && npm run build)
 ```
 
+`backend/scripts/testdb.sh` runs a throwaway Postgres on 127.0.0.1:55432, never
+the compose `db` service. Tests marked `integration` are the only ones needing
+it. See `README.md`.
+
+Run without asking: reads, read-only diagnostics, any command above, start/restart dev server.
+Ask first: writes outside the repo, spending money, publishing, deploying, production data.
+
+## 6. Gates
+
+```
+First code after freeze is gates. No implementation in that session.
+Derive from the plan's invariants. Never from an implementation.
+Run each. Show it failing. Confirm it fails for missing behavior — not a typo, missing import, or unbuilt fixture.
+Never relax, skip, or delete a gate to reach green.
+Assert the invariant, not the shape.
+Assert numbers: widths, counts, timings, actual output. Never "looks right" or "resembles".
+```
+
+## 7. Verification
+
+Done requires ALL of:
+```
+1. gates observed failing before the change
+2. <test-full> passes
+3. <typecheck> passes
+4. <lint>      passes
+5. <build>     passes
+```
+A clean review is not verification. Handing off with a failure: name it, paste the output.
+
 `<typecheck>` has no command and `<lint>` covers the frontend only: the backend
 has neither a linter nor a type checker, and the frontend is plain JSX with no
 `tsc`. **Decided 2026-09-09: no `ruff`, no `mypy`** — that role is filled by
-review rather than by a tool. So on the backend those two checks are satisfied
+review rather than by a tool. So on the backend steps 3 and 4 are satisfied
 vacuously: say so plainly, never report them as passing. A backend change is not
 verified by `<test-full>` alone; read it for the classes of error a type checker
 would have caught — wrong argument names and counts, a `None` reaching something
 that cannot take one, an exception path that is raised but never mapped.
 
-`backend/scripts/testdb.sh` runs a throwaway Postgres on 127.0.0.1:55432, never
-the compose `db` service. Tests marked `integration` are the only ones needing
-it. See `README.md`.
+## 8. Scope
 
-## Sessions
+```
+No product-direction change without a human decision. Need an assumption → state it, continue.
+Smallest change that fully satisfies the task.
+No drive-by renames, unrelated refactors, or reformatting.
+Match surrounding idiom, naming, comment density.
+No new dependency where ~20 lines of local code would do.
+Secrets stay server-side. Never in client code, bundles, or logs.
+Before calling any library API: read the lockfile and the installed source, vendored docs, or --help. Never write a call from memory.
+```
 
-One role per session. Never take two.
+## 9. Before ending
 
-| Role | Reads | Writes |
-|---|---|---|
-| Plan | `AGENTS.md`, `handoff.md`, code | `plans/<feature>.md` |
-| Grade the plan | plan, code | `plans/<feature>.review.md` |
-| Write the gates | frozen plan | failing tests only |
-| Build | frozen plan, failing tests | code, `handoff.md` |
-| Review the build | plan, diff | `plans/<feature>.impl-review.md` |
+```
+always                                          → handoff.md, whole, §4 shape
+decision made, or plan deviated from            → handoff.md
+direction, scope, or rules changed              → handoff.md
+setup, commands, routes, env vars changed       → README.md
+>10 min lost, cause non-obvious                 → docs/gotchas.md, one line, symptom → fix
+```
 
-- Identify your role from the prompt. Ambiguous → ask before starting.
-- Read `handoff.md` first. Rewrite it whole before ending. Never append to it.
-- Write all output to disk before the session ends.
-- If you produced it, say so before grading it.
-- Grading output: severity, location, why it breaks, smallest fix. No praise, no summary of the artifact.
-- Never edit an artifact you are grading.
-- Never edit the plan while building against it.
-- Findings are arbitrated by a human. Do not act on them.
-- Build one phase at a time. Stop at the boundary.
-- Plan is wrong → stop and say so. Do not work around it.
+## 10. Replies
 
-## Tests first
+```
+Lead with the answer. No preamble. No restating the question.
+Match length to the question. Yes/no → yes/no, then the one caveat that matters.
+Prose for connected reasoning. Bullets for parallel items. Tables for 3+ things.
+Cut filler openers, hedges, closing re-summaries.
+Say the hard thing plainly: "This won't work, because X."
+```
 
-- After the plan freezes, the first code written is its gates. No implementation in that session.
-- Derive gates from the plan's invariants, not from an implementation.
-- Run each gate. Show it failing. Confirm it fails for missing behavior — not a typo, missing import, or unbuilt fixture.
-- A gate that passes before the work exists is not a gate. Stop and report it as a plan defect.
-- Never relax, skip, or delete a gate to reach green.
-- Assert the invariant, not the shape.
+Report after every task:
+```
+1. Changed  — files and behavior
+2. Verified — commands run → results
+3. Open     — stubs, skipped scope, limits
+```
+State failing tests with output. State skipped steps. State verified work plainly.
 
-## Verification
+## 11. NEVER
 
-Done requires all of: gates observed failing before the change, then `<test-full>`, `<typecheck>`, `<lint>`, `<build>` pass.
-
-A clean review is not verification.
-
-Handing off with a failure: name it, paste the output.
-
-**Without asking:** read files, read-only diagnostics, any command above, start or restart the dev server.
-
-**Ask first:** writes outside the repo, spending money, publishing, deploying, production data.
-
-## Scope
-
-- No product-direction change without a user decision. Need an assumption → state it, continue.
-- Smallest change that fully satisfies the task.
-- No drive-by renames, unrelated refactors, or reformatting.
-- Match surrounding idiom, naming, and comment density.
-- No new dependency where ~20 lines of local code would do.
-- Secrets stay server-side. Never in client code, bundles, or logs.
-- Out-of-scope findings → `BACKLOG.md`, under "Found while working".
-
-## Libraries
-
-Check the lockfile and read the installed source, vendored docs, or `--help` before calling any library API. Never write a call from memory.
-
-## Assertions
-
-Assert on numbers: widths, counts, timings, actual output. Never on whether something looks right or resembles an expected shape.
-
-## Before ending a session
-
-Update what your work invalidated:
-
-- decision made, or plan deviated from → `handoff.md`
-- direction, scope or rules changed → `handoff.md`
-- setup, commands, routes or env vars changed → `README.md`
-- something cost over ten minutes and the cause was non-obvious → `docs/gotchas.md`, one line, symptom → fix. Create the file if it doesn't exist.
-
-## Replies
-
-- Lead with the answer. No preamble, no restating the question.
-- Match length to the question. A yes/no gets a yes/no, then the one caveat that matters.
-- Prose for connected reasoning. Bullets only for parallel items. Tables only for three or more things.
-- Cut filler openers, hedges, and any closing paragraph that re-summarizes.
-- Say the hard thing plainly: "This won't work, because X."
-- Write like a senior colleague answering in Slack.
-
-After a task, report:
-
-1. What changed — files and behavior.
-2. What was verified — commands run, and results.
-3. What's open — stubs, skipped scope, limits.
-
-State failing tests with their output. State skipped steps. State verified work plainly.
+```
+commit, push, tag, merge, open a pull request
+modify CI config, deploy manifests, release tooling
+add, upgrade, or remove a dependency without approval
+rewrite git history
+write to AGENTS.md
+set Status: frozen
+change a finding's state
+edit a gate
+edit the body of an artifact you are grading
+touch production data or non-local environments
+```
 
 ---
 
 ## Stack
-
-<!-- versions and anything non-obvious about the runtime -->
-
-## Style
-
-<!-- one rule per line, plus a 3–10 line snippet from real code where a pattern is ambiguous -->
+<!-- versions; anything non-obvious about the runtime -->
 
 ## Invariants
+<!-- properties not inferable from the code. State as absolutes. -->
 
-<!-- properties that cannot be inferred from the code. State as absolutes. -->
-
-## Boundaries
-
-- Never commit, push, tag, merge, or open a pull request.
-- Never modify CI config, deploy manifests, or release tooling.
-- Never add, upgrade, or remove a dependency without approval.
-- Never rewrite git history.
-- Never write to `AGENTS.md`. Ask.
-- Never touch production data or non-local environments.
+## Style
+<!-- one rule per line + a 3–10 line snippet from real code where a pattern is ambiguous -->

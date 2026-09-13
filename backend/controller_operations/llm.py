@@ -9,7 +9,7 @@ from error_logger import logger
 # Groq exposes an OpenAI-compatible API at this base URL, so the openai SDK
 # works against it unchanged — only api_key and base_url differ.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.6-27b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
 # Qwen3.6 is a reasoning model whose thinking mode is on by default. Move picking

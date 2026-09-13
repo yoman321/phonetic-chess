@@ -8,6 +8,26 @@ normally; the tone-based path is the novel feature.
 
 **Live:** https://phoneticchess.duckdns.org
 
+## Benchmarks
+
+- **Every move played is legal — 100%, never "usually."** The LLM's chosen UCI is
+  checked against `python-chess`'s full legal-move set for the position before
+  anything is applied; an out-of-set answer is rejected and re-asked up to
+  `LLM_MAX_RETRIES` (3), and a run that never returns a legal move fails the
+  request rather than playing something. Sunfish ranks and trims the candidate
+  list the model is shown — it does not do the legality check.
+
+| Measured | Result |
+|---|---|
+| Illegal moves reaching the board | **0 of 174,983** candidates ranked across 200 random games |
+| Sunfish candidate ranking (`rank_moves`) | 0.13 ms median, 0.17 ms p95 |
+| Sunfish static eval (`evaluate`) | 0.02 ms median, 0.03 ms p95 |
+| LLM round trip (Groq), tone move | not benchmarked — dominates the above by ~3 orders of magnitude |
+
+Ranking and eval measured over 7 positions (4-48 legal moves each), 200 runs
+apiece, Python 3.14 on an Apple M4. Both are pure-Python and search-free, so
+per-move engine cost is negligible next to the network call.
+
 ## How It Works
 
 1. A player types something like *"play it safe"* or *"go for the throat."*
@@ -37,9 +57,14 @@ suggestions keep things sound.
 Requires Docker and a `GROQ_API_KEY`.
 
 ```bash
-cp backend/.env.example backend/.env   # then paste your GROQ_API_KEY
-docker compose up --build              # → http://localhost  (frontend on host port 80)
+cp .env.example backend/.env   # then paste your GROQ_API_KEY
+docker compose up --build      # → http://localhost:8080
 ```
+
+Compose publishes the frontend on `127.0.0.1:8080` only — not on port 80 and not
+on a public interface — because in production Caddy is the sole public face and
+reverse-proxies to it. The backend is `expose`d on 5001 inside the compose
+network with no host port; nginx in the frontend container proxies `/api` to it.
 
 If the image build fails under BuildKit (seen on macOS), disable it:
 
@@ -64,8 +89,10 @@ database and nothing else. For a database that already has data:
 psql "$DATABASE_URL" -f backend/schema.sql
 ```
 
-`schema.sql` is written to be safe to re-run, and is additive only: it can create
-and add, never alter or remove.
+`schema.sql` is written to be safe to re-run. It is additive with one exception:
+the `sessions_status_check` constraint is dropped and re-added on every run, since
+`CREATE TABLE IF NOT EXISTS` cannot narrow a constraint on a table that already
+exists. Nothing else alters or removes.
 
 ## Tests
 
@@ -99,7 +126,8 @@ integration"` runs with none present.
 
 ## Environment Variables
 
-- `GROQ_API_KEY` (required) — set in `backend/.env`.
+- `GROQ_API_KEY` (required) — set in `backend/.env`. Read once at import
+  (`llm.py:11`), so the backend must restart to pick up a change.
 - `DATABASE_URL` — overridden in compose to point at the `db` service.
 - Optional tuning: `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_REASONING_EFFORT`
   (default `none`; set to `default` to enable thinking mode), `LLM_TIMEOUT`,

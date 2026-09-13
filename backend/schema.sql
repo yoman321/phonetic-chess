@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     white_token  TEXT,
     black_token  TEXT,
     status       TEXT        NOT NULL DEFAULT 'active'
-                            CHECK (status IN ('active', 'white_won', 'black_won', 'draw', 'abandoned')),
+                            CHECK (status IN ('active', 'white_won', 'black_won', 'draw')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -22,11 +22,18 @@ CREATE TABLE IF NOT EXISTS moves (
     PRIMARY KEY (session_id, ply)
 );
 
-ALTER TABLE moves ADD COLUMN IF NOT EXISTS tone_summary TEXT;
-
 CREATE INDEX IF NOT EXISTS idx_moves_session_id ON moves(session_id);
 
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_disconnected_at TIMESTAMPTZ;
+
+-- Narrows the CHECK above on a database that already exists, which
+-- CREATE TABLE IF NOT EXISTS cannot do. 'abandoned' was never written by any
+-- code path: ended-ness is computed from last_disconnected_at, never stored.
+-- Drop-then-add rather than ADD IF NOT EXISTS so a re-run replaces the old
+-- five-value constraint instead of leaving it in place.
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_status_check;
+ALTER TABLE sessions ADD CONSTRAINT sessions_status_check
+    CHECK (status IN ('active', 'white_won', 'black_won', 'draw'));
 
 CREATE TABLE IF NOT EXISTS session_connections (
     session_id  TEXT        NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
