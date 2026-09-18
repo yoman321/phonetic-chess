@@ -10,14 +10,24 @@ from error_logger import logger
 # works against it unchanged — only api_key and base_url differ.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.6-27b")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3.8-27b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
-# Qwen3.6 is a reasoning model whose thinking mode is on by default. Move picking
+# qwen3.6-27b was withdrawn from this Groq account between 2026-09-13 and
+# 2026-09-16 and now 404s; 3.8 is its successor and was verified live on
+# 2026-09-16 (plans/llm-token-optimization/09-model-and-max-tokens.md).
+# Qwen is a reasoning model whose thinking mode is on by default. Move picking
 # is latency-sensitive (one call per move, inside LLM_TIMEOUT) and reasoning
-# tokens bill as output at $3.00/1M, so default to non-thinking mode. Set
-# LLM_REASONING_EFFORT=default to turn thinking back on. Ignored by models that
-# don't take the parameter.
+# tokens count against the rate-limit bucket as output, so default to
+# non-thinking mode. Set LLM_REASONING_EFFORT=default to turn thinking back on.
+# Ignored by models that don't take the parameter.
 LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "none")
+# Groq rejects a request pre-emptively when the declared output ceiling
+# exceeds the per-minute output budget, so the ceiling must be declared: the
+# SDK otherwise sends its own default of 2048. Measured replies run 84-102
+# visible tokens, and 400 was verified live over 10 moves with no truncation
+# (plans/llm-token-optimization/09-model-and-max-tokens.md).
+# A truncated reply is invalid JSON and burns all LLM_MAX_RETRIES attempts.
+LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "400"))
 LLM_MAX_RETRIES = min(int(os.environ.get("LLM_MAX_RETRIES", "3")), 3)
 LLM_BACKOFF_BASE = float(os.environ.get("LLM_BACKOFF_BASE", "0.5"))
 SDK_MAX_RETRIES = 3
@@ -202,6 +212,7 @@ def pick_move_with_llm(
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.7,
+                max_tokens=LLM_MAX_TOKENS,
                 # extra_body rather than named kwargs: these are Groq
                 # extensions, and openai>=1.30 (our floor) has no typed
                 # reasoning_effort param. reasoning_format=hidden keeps any

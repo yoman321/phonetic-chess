@@ -133,9 +133,11 @@ integration"` runs with none present.
 - `GROQ_API_KEY` (required) — set in `backend/.env`. Read once at import
   (`llm.py:11`), so the backend must restart to pick up a change.
 - `DATABASE_URL` — overridden in compose to point at the `db` service.
-- Optional tuning: `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_REASONING_EFFORT`
+- Optional tuning: `LLM_MODEL` (default `qwen/qwen3.8-27b`), `LLM_REASONING_EFFORT`
   (default `none`; set to `default` to enable thinking mode), `LLM_TIMEOUT`,
-  `LLM_MAX_RETRIES`, `LLM_BACKOFF_BASE`, `IDLE_TTL_SECONDS`.
+  `LLM_MAX_TOKENS` (default `400` — the output ceiling per call; too low
+  truncates the reply into invalid JSON), `LLM_MAX_RETRIES`, `LLM_BACKOFF_BASE`,
+  `IDLE_TTL_SECONDS`.
 
 ## Production Deployment
 

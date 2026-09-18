@@ -393,10 +393,13 @@ chat message.
 read per connection by `db.py` and is force-overridden in compose to point at the
 `db` service, so the value in `backend/.env` is ignored under Docker.
 
-Optional: `LLM_MODEL` (default `qwen/qwen3.6-27b`), `LLM_TIMEOUT`
+Optional: `LLM_MODEL` (default `qwen/qwen3.8-27b`), `LLM_TIMEOUT`
 (30), `LLM_REASONING_EFFORT` (`none` — thinking is off by default because reasoning
 tokens bill as output and every move is one latency-sensitive call; set to `default`
-to enable), `LLM_MAX_RETRIES` (3, hard-capped at 3), `LLM_BACKOFF_BASE` (0.5),
+to enable), `LLM_MAX_TOKENS` (400 — declared on every call, because the SDK otherwise sends
+its own default of 2048 and Groq refuses the request pre-emptively; a value that
+truncates the reply yields invalid JSON), `LLM_MAX_RETRIES` (3, hard-capped at 3),
+`LLM_BACKOFF_BASE` (0.5),
 `IDLE_TTL_SECONDS` (600 — how long a room must sit empty before the game is
 refused; it is compared against, not counted down, and nothing is deleted when it
 passes).

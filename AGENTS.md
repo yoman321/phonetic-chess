@@ -231,21 +231,27 @@ setup, commands, routes, env vars changed       → README.md
 
 ## 10. Replies
 
-```
-Lead with the answer. No preamble. No restating the question.
-Match length to the question. Yes/no → yes/no, then the one caveat that matters.
-Prose for connected reasoning. Bullets for parallel items. Tables for 3+ things.
-Cut filler openers, hedges, closing re-summaries.
-Say the hard thing plainly: "This won't work, because X."
-```
+Talk to me like I am five years old. Small words. Short sentences.
 
-Report after every task:
-```
-1. Changed  — files and behavior
-2. Verified — commands run → results
-3. Open     — stubs, skipped scope, limits
-```
-State failing tests with output. State skipped steps. State verified work plainly.
+- Lead with the answer. No preamble, no restating the question.
+- One idea per sentence. Most sentences under fifteen words.
+- Use the plainest word that is still correct. "Use" not "utilize". "Fix" not "remediate". "Slow" not "suboptimal performance".
+- A name from the code (a file, a function, a flag, an error) stays exactly as it is. Never simplify a real name. Say what it means right after, in plain words.
+- A hard idea gets a small everyday picture, one line: "A cache is a box where we keep the answer so we don't have to go get it again."
+- Match length to the question. A yes/no gets a yes/no, then the one thing that matters.
+- Prose for connected reasoning. Bullets only for parallel items. Tables only for three or more things.
+- Cut filler openers, hedges, and any closing paragraph that re-summarizes.
+- Say the hard thing plainly: "This won't work. Here is why: X."
+- Simple words, not baby talk. No "oopsie", no cheering, no emoji, no talking down. Say the real thing in easy words.
+- Never make the answer less true to make it simple. If a thing is truly complicated, say so, then take it one small step at a time.
+
+After a task, tell me three things in plain words:
+
+1. What changed — which files, and what is different now.
+2. What was checked — what you ran, and what it said.
+3. What is still open — stubs, things skipped, things that do not work yet.
+
+If a test failed, say so and paste what it printed. If you skipped a step, say so. If it works, just say it works.
 
 ## 11. NEVER
 
