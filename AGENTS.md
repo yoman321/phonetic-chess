@@ -26,8 +26,8 @@ done:     every invariant stated; phases numbered; Status: draft
 model:    sol            # must differ from the plan's provenance model
 requires: Status: draft
 reads:    plans/<feature>.md, code
-writes:   plans/<feature>.md § "## Plan review"
-done:     section replaced whole; Status set to reviewed
+writes:   plans/<feature>.md plan body + § "## Plan review"
+done:     needed revisions written into the plan; review section replaced whole; Status set to reviewed
 ```
 
 ### Write the gates
@@ -45,8 +45,20 @@ model:    sol
 requires: Status: frozen, gates failing
 reads:    plans/<feature>.md, tests
 writes:   code
-done:     phase gates green; §7 passes
+done:     every phase built before any test is run; §7 run in full; every failure reported
 ```
+
+Build, in this order, every time:
+
+1. **Build all of it.** Every phase of the plan, in order. Do not stop at a phase boundary. Do not run a test yet.
+2. **Test all of it.** Then run the gates and all of §7: `<test-full>`, `<typecheck>`, `<lint>`, `<build>`. Run every one, even after the first failure. Never stop at the first red.
+3. **Report anything wrong.** List every failure: what failed, the command, the pasted output, and which phase or file it points at. Name anything you built that you are unsure of. Name anything in the plan that turned out wrong or missing.
+
+Rules for step 3:
+- Report failures. Never hide, skip, or explain one away.
+- Never relax, skip, or delete a gate to reach green.
+- All of §7 green and nothing unsure → say so plainly in one line. Do not pad it.
+- Anything still red after 3 attempts with no gate changing state → STOP (§2), write the failures into `handoff.md`, report. Do not push through.
 
 ### Review the build
 ```
@@ -60,9 +72,9 @@ done:     section replaced whole
 Rules:
 - Every session rewrites `handoff.md` whole before ending. Never append.
 - Write all output to disk before the session ends.
-- Build one phase at a time. Stop at the phase boundary.
+- Build every phase in order before running any gate or test. Do not stop at phase boundaries.
 - One feature, one active session. Two sessions never write one file.
-- Grading sessions replace only their own section. Every other line stays byte-identical.
+- Grading sessions may revise the plan body and replace their own review section. They do not write code or tests.
 
 ## 2. STOP conditions
 
@@ -71,10 +83,10 @@ Stop. Rewrite `handoff.md`. Report. Do not push through.
 ```
 plan Status ≠ role requires          → STOP, name the status found
 provenance model == your model       → STOP, do not grade your own output
-3 turns, no gate changed state       → STOP, name what you tried and observed
+3 post-build test attempts, no gate changed state → STOP, name what you tried and observed
 gate is wrong                        → STOP, never edit a gate
 gate passes before work exists       → STOP, report as plan defect
-plan is wrong                        → STOP, never work around it
+plan is wrong outside Plan/Grade     → STOP, never work around it
 product decision needed              → STOP, state options, do not pick
 about to write outside role.writes   → STOP
 ```
@@ -104,8 +116,8 @@ Status: draft | reviewed | frozen
 Phases: <n>
 ```
 ```
-draft     Plan is writing. Nothing downstream may read it.
-reviewed  A grading session wrote "## Plan review". Findings open.
+draft     Plan is being written. Only Plan and Grade may read or edit it.
+reviewed  A grading session revised the plan and wrote "## Plan review". Findings may remain open.
 frozen    Human resolved every finding and set this. ONLY A HUMAN SETS frozen.
           Requires zero [open] findings.
 ```
@@ -118,8 +130,9 @@ Finding — one per line, both review sections:
 ```
 state:     [open] → [accepted] | [rejected]. ONLY A HUMAN CHANGES STATE.
 severity:  high = breaks an invariant | med = breaks under a stated condition | low = cost, clarity, drift
-forbidden: praise, summary of the artifact, acting on a finding, resolving your own
+forbidden: praise, summary of the artifact, changing a finding's state, resolving your own
 ```
+The Grade role may fix defects directly in the plan body. Its review section lists only issues that remain unresolved.
 
 `handoff.md` — exact shape, every session:
 ```
@@ -196,6 +209,8 @@ Done requires ALL of:
 4. <lint>      passes
 5. <build>     passes
 ```
+The Build role completes every planned phase before running step 2 or any other test or gate.
+Run all five. Do not stop at the first failure. Report every failure you found, not just the first one.
 A clean review is not verification. Handing off with a failure: name it, paste the output.
 
 `<typecheck>` has no command and `<lint>` covers the frontend only: the backend
@@ -233,25 +248,27 @@ setup, commands, routes, env vars changed       → README.md
 
 Talk to me like I am five years old. Small words. Short sentences.
 
-- Lead with the answer. No preamble, no restating the question.
-- One idea per sentence. Most sentences under fifteen words.
-- Use the plainest word that is still correct. "Use" not "utilize". "Fix" not "remediate". "Slow" not "suboptimal performance".
-- A name from the code (a file, a function, a flag, an error) stays exactly as it is. Never simplify a real name. Say what it means right after, in plain words.
-- A hard idea gets a small everyday picture, one line: "A cache is a box where we keep the answer so we don't have to go get it again."
-- Match length to the question. A yes/no gets a yes/no, then the one thing that matters.
-- Prose for connected reasoning. Bullets only for parallel items. Tables only for three or more things.
-- Cut filler openers, hedges, and any closing paragraph that re-summarizes.
-- Say the hard thing plainly: "This won't work. Here is why: X."
-- Simple words, not baby talk. No "oopsie", no cheering, no emoji, no talking down. Say the real thing in easy words.
-- Never make the answer less true to make it simple. If a thing is truly complicated, say so, then take it one small step at a time.
+```
+One idea per sentence. Most sentences under 15 words.
+Plainest word that is still correct. "Use" not "utilize". "Fix" not "remediate".
+Real names stay exact — files, functions, flags, errors, commands. Say what they mean right after, in plain words.
+Hard idea → one small everyday picture, one line.
+Lead with the answer. No preamble. No restating the question.
+Match length to the question. Yes/no → yes/no, then the one thing that matters.
+Prose for connected reasoning. Bullets for parallel items. Tables for 3+ things.
+Cut filler openers, hedges, closing re-summaries.
+Say the hard thing plainly: "This won't work. Here is why: X."
+Simple words, not baby talk. No cheering, no emoji, no talking down.
+Never make it less true to make it simple. Truly complicated → say so, then one small step at a time.
+```
 
-After a task, tell me three things in plain words:
-
-1. What changed — which files, and what is different now.
-2. What was checked — what you ran, and what it said.
-3. What is still open — stubs, things skipped, things that do not work yet.
-
-If a test failed, say so and paste what it printed. If you skipped a step, say so. If it works, just say it works.
+Report after every task, in plain words:
+```
+1. Changed  — which files, and what is different now
+2. Verified — what you ran → what it said
+3. Open     — stubs, things skipped, things that do not work yet
+```
+A test failed → say so and paste what it printed. A step skipped → say so. It works → just say it works.
 
 ## 11. NEVER
 
@@ -264,7 +281,6 @@ write to AGENTS.md
 set Status: frozen
 change a finding's state
 edit a gate
-edit the body of an artifact you are grading
 touch production data or non-local environments
 ```
 

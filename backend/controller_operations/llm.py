@@ -142,56 +142,37 @@ def _content_outcome(exc):
     return "invalid_uci"
 
 
-def pick_move_with_llm(
-    text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None,
-    on_retry=None, log=None,
+def build_move_prompt(
+    text, fen, candidates, prior_tone_summary="", last_move=None,
 ):
-    """Ask Groq to pick a UCI and emit an updated tone summary.
-
-    candidates: list of (uci, san) pairs shown to the LLM as suggested moves
-        (typically Sunfish's top-N). Advisory only.
-    valid_ucis: set of UCIs the LLM's chosen move must belong to. Defaults to
-        just the candidate set (strict). Pass a wider set (e.g. all legal
-        moves) to make the candidate list advisory rather than binding.
-    prior_tone_summary: rolling summary of the game's tone so far (may be "").
-    last_move: (uci, san) of the most recent move played, or None.
-    Returns (uci, tone_summary). Retries on bad JSON or
-    out-of-set UCI up to LLM_MAX_RETRIES times before raising the last error.
-    """
-    moves_listing = "\n".join(f"- {uci} ({san})" for uci, san in candidates)
-    if valid_ucis is None:
-        valid_ucis = {uci for uci, _ in candidates}
-    last_move_str = (
-        f"{last_move[0]} ({last_move[1]})" if last_move else "(no moves yet)"
-    )
-
+    """Return the rendered system and user messages for move selection."""
     system = (
-        "You are picking a chess move based on the emotional tone of a player's "
-        "message AND the running tone of the game so far. Tone signals attitude — "
-        "aggressive, defensive, playful, sad, cautious, confident, etc. Match the "
-        "move's character to that tone: captures, checks, and sharp threats for "
-        "aggressive or bold; quiet developing or retreating moves for cautious or "
-        "sad; solid central moves for confident; sideline or surprising moves for "
-        "playful. Use the prior tone summary as context — if the game has been calm "
-        "and the new message is suddenly aggressive, the shift should show in the "
-        "move. After choosing, write a SHORT (one or two sentences) updated tone "
-        "summary that folds the new message into the running narrative. "
-        'Reply ONLY with JSON of the form '
-        '{"uci": "<one of the legal UCIs>", '
-        '"tone_summary": "<updated rolling summary>"}.'
+        "ROLE: pick a chess move that expresses MSG, read against the running TONE.\n"
+        "MAP: aggressive|bold -> captures, checks, sharp threats.\n"
+        "     cautious|sad -> quiet developing or retreating.\n"
+        "     confident -> solid central. playful -> sideline, surprising.\n"
+        "SHIFT: TONE calm and MSG not calm -> the move shows the change.\n"
+        "OUT: JSON only, no prose.\n"
+        '     {"uci":"<legal uci>","tone_summary":"<=2 sentences, TONE folded with MSG>"}'
     )
-    user = (
-        f"Tone of the game so far: {prior_tone_summary or '(none yet)'}\n"
-        f"Last move played by the opponent: {last_move_str}\n"
-        f"New player message: {text}\n"
-        f"Position FEN: {fen}\n"
-        f"Suggested moves (engine-recommended, uci (san)):\n{moves_listing}\n"
-        "Prefer one of the suggested moves — they are sound chess. Only pick "
-        "a different legal UCI if no suggestion fits the tone at all. "
-        "Always provide an updated tone_summary that reflects how the new "
-        "message and the opponent's last move shift the game's mood."
-    )
+    user = json.dumps({
+        "TONE": prior_tone_summary or None,
+        "LAST": last_move[0] if last_move else None,
+        "MSG": text,
+        "FEN": fen,
+        "CAND": [uci for uci, _san in candidates],
+        "RULE": "choose CAND; leave it only if none fits MSG; tone_summary nonempty",
+    }, ensure_ascii=False, separators=(",", ":"))
+    return system, user
 
+
+def _pick_move_from_messages(
+    system, user, candidates, valid_ucis, on_retry=None, log=None,
+    client=None, sleeper=None,
+):
+    """Run the shared provider, validation, retry, and logging loop."""
+    client = client or _client
+    sleeper = sleeper or time.sleep
     last_err = None
     for attempt in range(LLM_MAX_RETRIES):
         attempt_started = time.monotonic()
@@ -199,7 +180,7 @@ def pick_move_with_llm(
         sdk_retries = None
         usage = None
         try:
-            raw = _client.chat.completions.with_raw_response.create(
+            raw = client.chat.completions.with_raw_response.create(
                 model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system},
@@ -208,10 +189,6 @@ def pick_move_with_llm(
                 response_format={"type": "json_object"},
                 temperature=0.7,
                 max_tokens=LLM_MAX_TOKENS,
-                # extra_body rather than named kwargs: these are Groq
-                # extensions, and openai>=1.30 (our floor) has no typed
-                # reasoning_effort param. reasoning_format=hidden keeps any
-                # thinking out of message.content so json.loads stays safe.
                 extra_body={
                     "reasoning_effort": LLM_REASONING_EFFORT,
                     "reasoning_format": "hidden",
@@ -230,7 +207,7 @@ def pick_move_with_llm(
             tone_summary = (parsed.get("tone_summary") or "").strip()
             if uci not in valid_ucis:
                 raise ValueError(f"llm returned invalid uci: {uci!r}")
-            off_list = uci not in {u for u, _ in candidates}
+            off_list = uci not in {candidate for candidate, _ in candidates}
             if log is not None:
                 log.add_attempt(
                     attempt + 1, "ok", attempt_started,
@@ -246,9 +223,6 @@ def pick_move_with_llm(
             )
             return uci, tone_summary
         except (APIConnectionError, APITimeoutError, APIStatusError) as e:
-            # SDK already retried 3 times — surface as TimeoutError so the
-            # caller's (URLError, TimeoutError) handler maps it to the
-            # llm_unavailable ApiError the frontend knows how to display.
             if log is not None:
                 log.add_attempt(
                     attempt + 1, "transport", attempt_started,
@@ -275,12 +249,8 @@ def pick_move_with_llm(
                         on_retry(attempt + 1)
                     except Exception:
                         logger.exception("[llm] on_retry callback raised")
-                time.sleep(LLM_BACKOFF_BASE * (2 ** attempt))
+                sleeper(LLM_BACKOFF_BASE * (2 ** attempt))
         except Exception as e:
-            # Keep unrecognised endings observable without assuming their reply
-            # content is safe to retain. They follow the content-failure retry
-            # path and become ValueError at exhaustion so the caller preserves
-            # its existing llm_bad_response mapping.
             last_err = ValueError(str(e))
             if log is not None:
                 log.add_attempt(
@@ -298,7 +268,7 @@ def pick_move_with_llm(
                         on_retry(attempt + 1)
                     except Exception:
                         logger.exception("[llm] on_retry callback raised")
-                time.sleep(LLM_BACKOFF_BASE * (2 ** attempt))
+                sleeper(LLM_BACKOFF_BASE * (2 ** attempt))
     logger.info(
         "[llm] giving up after %d attempts; last_err=%s: %s",
         LLM_MAX_RETRIES, type(last_err).__name__, last_err,
@@ -306,6 +276,33 @@ def pick_move_with_llm(
     if log is not None:
         log.finish("exhausted")
     raise last_err
+
+
+def pick_move_with_llm(
+    text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None,
+    on_retry=None, log=None, _client_override=None, _sleeper=None,
+):
+    """Ask Groq to pick a UCI and emit an updated tone summary.
+
+    candidates: list of (uci, san) pairs shown to the LLM as suggested moves
+        (typically Sunfish's top-N). Advisory only.
+    valid_ucis: set of UCIs the LLM's chosen move must belong to. Defaults to
+        just the candidate set (strict). Pass a wider set (e.g. all legal
+        moves) to make the candidate list advisory rather than binding.
+    prior_tone_summary: rolling summary of the game's tone so far (may be "").
+    last_move: (uci, san) of the most recent move played, or None.
+    Returns (uci, tone_summary). Retries on bad JSON or
+    out-of-set UCI up to LLM_MAX_RETRIES times before raising the last error.
+    """
+    if valid_ucis is None:
+        valid_ucis = {uci for uci, _ in candidates}
+    system, user = build_move_prompt(
+        text, fen, candidates, prior_tone_summary, last_move,
+    )
+    return _pick_move_from_messages(
+        system, user, candidates, valid_ucis, on_retry=on_retry, log=log,
+        client=_client_override, sleeper=_sleeper,
+    )
 
 
 def explain_move_with_llm(text, fen, prior_tone, uci, san):

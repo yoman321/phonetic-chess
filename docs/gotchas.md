@@ -20,6 +20,12 @@ Known issues, symptom → fix. Delete an entry once its cause is fixed.
   reach the write must fill the log — `log.add_attempt(...)` and `log.finish(...)`
   — or it silently asserts nothing.
 
+- The move-prompt benchmark runs all 60 paid provider calls and only then dies
+  with `this Build session requires the Codex CLI` → `judge.py` hardcodes Codex
+  flags and `cli_info` checks the CLI name last, after the arms. Run it with
+  `JUDGE_CLI=codex`, or judge the recorded `invocations.jsonl` by hand — the run
+  directory under `backend/.benchmark-results/` keeps everything needed.
+
 Removed 2026-09-09, cause fixed by Phase 4 of `plans/live-game-integrity.md`
 (one connection per operation): rows left behind by an operation still holding a
 row lock, three-or-more concurrent operations wedging in `Transaction.__exit__`,

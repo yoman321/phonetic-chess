@@ -23,10 +23,28 @@ normally; the tone-based path is the novel feature.
 | Sunfish candidate ranking (`rank_moves`) | 0.13 ms median, 0.17 ms p95 |
 | Sunfish static eval (`evaluate`) | 0.02 ms median, 0.03 ms p95 |
 | LLM round trip (Groq), tone move | not benchmarked — dominates the above by ~3 orders of magnitude |
+| Tone-move input prompt | **262.6 tokens**, down from 434.6 — a 171.9-token cut, measured 2026-09-19 |
 
 Ranking and eval measured over 7 positions (4-48 legal moves each), 200 runs
 apiece, Python 3.14 on an Apple M4. Both are pure-Python and search-free, so
 per-move engine cost is negligible next to the network call.
+
+The prompt figure is the provider's own `usage.prompt_tokens`, averaged over 60
+live calls across 20 frozen positions — 40 on the old prompt, 20 on the new one.
+`plans/machine-readable-move-prompt.md` has the method and the tone-parity check
+that went with it. Output tokens are unchanged; only the input side was touched.
+To re-run it (it spends money on Groq and on a judge CLI, so it is skipped by
+default):
+
+```bash
+(cd backend && LLM_LIVE=1 JUDGE_LIVE=1 JUDGE_CLI=codex \
+    .venv/bin/pytest -q tests/test_machine_readable_move_prompt_live.py)
+```
+
+`LLM_LIVE=1` allows the provider calls, `JUDGE_LIVE=1` allows the tone judge, and
+`JUDGE_CLI` picks the judge binary — Codex only today, see `docs/gotchas.md`.
+Results land in `backend/.benchmark-results/machine-readable-move-prompt/<run-id>/`,
+which is local output and not committed.
 
 ## How It Works
 

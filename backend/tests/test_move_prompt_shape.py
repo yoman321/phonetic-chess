@@ -3,15 +3,14 @@
 Fast tier: no Postgres, no network. The seam is the module-level client, so a
 gate here reads the exact strings that would have gone to Groq.
 
-Invariant 2 is a token count, and only the provider can count tokens. It is
-gated twice: once offline against the exact bytes whose removal produces the
-measured delta, and once live against `usage.prompt_tokens` behind LLM_LIVE=1.
-`plans/llm-token-optimization/05-ab-lazy-explain.md` measured that delta at
-exactly 62 tokens, 5 times out of 5 — deterministic, because the two system
-prompts differ by a fixed string.
+Invariant 2's byte-pin and its live FULL-vs-LEAN token gate were removed when
+plans/machine-readable-move-prompt.md replaced the prompt they measured; the
+human authorized that in decision 5. What replaces them:
+tests/test_machine_readable_move_prompt.py pins the shipped builder, and
+tests/test_machine_readable_move_prompt_live.py measures the shipped OLD-vs-NEW
+saving. The control below still holds: the shipped prompt is not the FULL one.
 """
 import json
-import os
 
 import chess
 import pytest
@@ -62,9 +61,6 @@ SYSTEM_LEAN = TONE_RULES + LEAN_TAIL
 FIXED_FEN = chess.Board().fen()
 FIXED_TEXT = "let's go, I'm coming right at you"
 FIXED_PRIOR_TONE = "calm and watchful so far"
-
-MIN_INPUT_SAVING = 55        # invariant 2; measured at 62
-
 
 # --- a client that records instead of calling -------------------------------
 
@@ -163,18 +159,6 @@ def test_the_move_prompt_asks_for_exactly_uci_and_tone_summary(recorder):
         )
 
 
-def test_the_move_prompt_is_the_measured_lean_prompt(recorder):
-    """Invariant 2, offline arm.
-
-    Byte-for-byte against the LEAN string that was measured at 62 input tokens
-    below FULL. Asserting the count needs the provider; asserting the exact
-    bytes that produce it does not, and it is the same claim.
-    """
-    _pick(recorder)
-    system, _user = _prompts(recorder)
-    assert system == SYSTEM_LEAN
-
-
 def test_the_shipped_prompt_is_no_longer_the_full_prompt(recorder):
     """The control. Without it the gate above passes against a prompt nobody
     changed, if LEAN and FULL were ever to be the same string."""
@@ -227,68 +211,6 @@ def test_rank_moves_returns_every_legal_move_when_fewer_than_eight():
     legal = sorted(m.uci() for m in board.legal_moves)
     assert 0 < len(legal) < 8
     assert sorted(uci for uci, _san in rank_moves(board)) == legal
-
-
-# --- invariant 2, live arm --------------------------------------------------
-
-@pytest.mark.skipif(
-    not os.environ.get("LLM_LIVE"),
-    reason="needs a real Groq call; set LLM_LIVE=1 and GROQ_API_KEY to run",
-)
-def test_the_lean_prompt_costs_at_least_55_fewer_input_tokens():
-    """Invariant 2, measured.
-
-    The only arm that reads `usage.prompt_tokens`. Identical position, message
-    and prior tone; the system prompt is the only thing that differs. Skipped
-    by default because <test-full> must not depend on a paid external service —
-    say so rather than reporting it as passed.
-    """
-    from openai import OpenAI
-
-    board = chess.Board(FIXED_FEN)
-    candidates = rank_moves(board)
-    listing = "\n".join(f"- {u} ({s})" for u, s in candidates)
-    user = (
-        f"Tone of the game so far: {FIXED_PRIOR_TONE}\n"
-        "Last move played by the opponent: (no moves yet)\n"
-        f"New player message: {FIXED_TEXT}\n"
-        f"Position FEN: {FIXED_FEN}\n"
-        f"Suggested moves (engine-recommended, uci (san)):\n{listing}\n"
-        "Prefer one of the suggested moves — they are sound chess. Only pick "
-        "a different legal UCI if no suggestion fits the tone at all. "
-        "Always provide an updated tone_summary that reflects how the new "
-        "message and the opponent's last move shift the game's mood."
-    )
-    client = OpenAI(
-        api_key=os.environ["GROQ_API_KEY"],
-        base_url=llm.GROQ_BASE_URL,
-        timeout=60,
-        max_retries=3,
-    )
-
-    def _prompt_tokens(system):
-        resp = client.chat.completions.create(
-            model=llm.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.7,
-            max_tokens=llm.LLM_MAX_TOKENS,
-            extra_body={
-                "reasoning_effort": llm.LLM_REASONING_EFFORT,
-                "reasoning_format": "hidden",
-            },
-        )
-        return resp.usage.prompt_tokens
-
-    full = _prompt_tokens(SYSTEM_FULL)
-    lean = _prompt_tokens(SYSTEM_LEAN)
-    assert full - lean >= MIN_INPUT_SAVING, (
-        f"the lean prompt saved {full - lean} input tokens "
-        f"({full} -> {lean}); invariant 2 requires at least {MIN_INPUT_SAVING}"
-    )
 
 
 # --- the explain prompt -----------------------------------------------------

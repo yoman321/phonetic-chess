@@ -222,14 +222,21 @@ Same lock and ownership checks, then:
    well under a millisecond. On any Sunfish failure it falls back to the first 8
    legal moves; positions with ≤8 legal moves skip ranking entirely.
 3. **Broadcast `thinking`** so the opponent sees dots while the model works.
-4. **LLM** — `pick_move_with_llm` (`llm.py:135`) sends the prior tone summary, the
-   opponent's last move, the new phrase, the FEN, and the candidate list. Response
-   is forced to `json_object` with `{uci, tone_summary}`.
+4. **LLM** — `pick_move_with_llm` (`llm.py:281`) renders its two messages with
+   `build_move_prompt` (`llm.py:145`) and hands them to the shared provider loop
+   `_pick_move_from_messages` (`llm.py:169`). The user message is one compact JSON
+   object with the keys `TONE`, `LAST`, `MSG`, `FEN`, `CAND`, `RULE` — the prior
+   tone summary, the opponent's last move as bare UCI, the new phrase, the FEN,
+   and the candidate UCIs. Response is forced to `json_object` with
+   `{uci, tone_summary}`. Changed 2026-09-19 by
+   `plans/machine-readable-move-prompt.md`, which cut the measured input prompt
+   from 434.55 to 262.60 tokens; SAN was dropped from the candidate list and an
+   absent prior tone is now JSON `null` rather than the prose "(none yet)".
 5. **Validation** — the returned UCI is checked against **all legal moves**, not just
-   the 8 candidates. The candidate list is advisory by design: the prompt says
-   "prefer one of the suggested moves… only pick a different legal UCI if no
-   suggestion fits the tone at all," which lets the model play a deliberately
-   off-beat move when the tone calls for it while keeping the default sound.
+   the 8 candidates. The candidate list is advisory by design: the prompt's `RULE`
+   key says "choose CAND; leave it only if none fits MSG; tone_summary nonempty,"
+   which lets the model play a deliberately off-beat move when the tone calls for
+   it while keeping the default sound.
 6. **Retry and classify** — bad JSON, a missing key, an out-of-set UCI, or a
    response with no usable content retries up to `LLM_MAX_RETRIES` (capped at 3)
    with `LLM_BACKOFF_BASE * 2**attempt` backoff, emitting `status: "retrying"`

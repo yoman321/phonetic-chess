@@ -25,5 +25,10 @@ pnpm-debug.log*
 .vscode/
 *.swp
 
+# --- Local benchmark runs (plans/machine-readable-move-prompt.md: "local output,
+# not a committed fixture"). The frozen fixtures under backend/tests/fixtures/
+# ARE committed; these per-run outputs are not.
+backend/.benchmark-results/
+
 # --- Local notes (not published) ---
 BACKLOG.md

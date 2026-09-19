@@ -1,0 +1,907 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "open-01",
+      "phase": "opening",
+      "tone_tag": "aggressive",
+      "message": "let's go, I'm coming right at you",
+      "prior_tone": "",
+      "prev_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      "last_move": {
+        "uci": "e2e4",
+        "san": "e4"
+      },
+      "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+      "candidates": [
+        [
+          "e7e5",
+          "e5"
+        ],
+        [
+          "d7d5",
+          "d5"
+        ],
+        [
+          "b8c6",
+          "Nc6"
+        ],
+        [
+          "g8f6",
+          "Nf6"
+        ],
+        [
+          "e7e6",
+          "e6"
+        ],
+        [
+          "d7d6",
+          "d6"
+        ],
+        [
+          "f7f5",
+          "f5"
+        ],
+        [
+          "c7c5",
+          "c5"
+        ]
+      ]
+    },
+    {
+      "id": "open-02",
+      "phase": "opening",
+      "tone_tag": "confident",
+      "message": "I know this position better than you do",
+      "prior_tone": "White opened wide and sure of itself.",
+      "prev_fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+      "last_move": {
+        "uci": "e7e5",
+        "san": "e5"
+      },
+      "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+      "candidates": [
+        [
+          "d2d4",
+          "d4"
+        ],
+        [
+          "g1f3",
+          "Nf3"
+        ],
+        [
+          "b1c3",
+          "Nc3"
+        ],
+        [
+          "f1b5",
+          "Bb5"
+        ],
+        [
+          "f1c4",
+          "Bc4"
+        ],
+        [
+          "f1d3",
+          "Bd3"
+        ],
+        [
+          "d2d3",
+          "d3"
+        ],
+        [
+          "g1e2",
+          "Ne2"
+        ]
+      ]
+    },
+    {
+      "id": "open-03",
+      "phase": "opening",
+      "tone_tag": "cautious",
+      "message": "not sure about this, I'll take it slow",
+      "prior_tone": "Both sides are staking the centre early.",
+      "prev_fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+      "last_move": {
+        "uci": "g1f3",
+        "san": "Nf3"
+      },
+      "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+      "candidates": [
+        [
+          "d7d5",
+          "d5"
+        ],
+        [
+          "b8c6",
+          "Nc6"
+        ],
+        [
+          "g8f6",
+          "Nf6"
+        ],
+        [
+          "d8h4",
+          "Qh4"
+        ],
+        [
+          "f8c5",
+          "Bc5"
+        ],
+        [
+          "f8b4",
+          "Bb4"
+        ],
+        [
+          "d7d6",
+          "d6"
+        ],
+        [
+          "g8e7",
+          "Ne7"
+        ]
+      ]
+    },
+    {
+      "id": "open-04",
+      "phase": "opening",
+      "tone_tag": "playful",
+      "message": "watch this, you'll never guess what's next :)",
+      "prior_tone": "A quiet, well-mannered opening so far.",
+      "prev_fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+      "last_move": {
+        "uci": "b8c6",
+        "san": "Nc6"
+      },
+      "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+      "candidates": [
+        [
+          "f3e5",
+          "Nxe5"
+        ],
+        [
+          "d2d4",
+          "d4"
+        ],
+        [
+          "b1c3",
+          "Nc3"
+        ],
+        [
+          "f1b5",
+          "Bb5"
+        ],
+        [
+          "f1c4",
+          "Bc4"
+        ],
+        [
+          "f1d3",
+          "Bd3"
+        ],
+        [
+          "d2d3",
+          "d3"
+        ],
+        [
+          "f1e2",
+          "Be2"
+        ]
+      ]
+    },
+    {
+      "id": "open-05",
+      "phase": "opening",
+      "tone_tag": "defensive",
+      "message": "I'm just going to hold everything together",
+      "prior_tone": "The game is polite but the pieces are gathering.",
+      "prev_fen": "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+      "last_move": {
+        "uci": "f1c4",
+        "san": "Bc4"
+      },
+      "fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+      "candidates": [
+        [
+          "d7d5",
+          "d5"
+        ],
+        [
+          "g8f6",
+          "Nf6"
+        ],
+        [
+          "d8h4",
+          "Qh4"
+        ],
+        [
+          "f8c5",
+          "Bc5"
+        ],
+        [
+          "f8b4",
+          "Bb4"
+        ],
+        [
+          "d7d6",
+          "d6"
+        ],
+        [
+          "g8e7",
+          "Nge7"
+        ],
+        [
+          "f8d6",
+          "Bd6"
+        ]
+      ]
+    },
+    {
+      "id": "open-06",
+      "phase": "opening",
+      "tone_tag": "sad",
+      "message": "I don't think this is going to go well for me",
+      "prior_tone": "White is building pressure; Black is nervous.",
+      "prev_fen": "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+      "last_move": {
+        "uci": "f8c5",
+        "san": "Bc5"
+      },
+      "fen": "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+      "candidates": [
+        [
+          "f3e5",
+          "Nxe5"
+        ],
+        [
+          "c4f7",
+          "Bxf7+"
+        ],
+        [
+          "e1g1",
+          "O-O"
+        ],
+        [
+          "d2d4",
+          "d4"
+        ],
+        [
+          "b1c3",
+          "Nc3"
+        ],
+        [
+          "c4e6",
+          "Be6"
+        ],
+        [
+          "d2d3",
+          "d3"
+        ],
+        [
+          "c4d5",
+          "Bd5"
+        ]
+      ]
+    },
+    {
+      "id": "open-07",
+      "phase": "opening",
+      "tone_tag": "neutral",
+      "message": "ok, your move",
+      "prior_tone": "Sharp opening play with both kings still uncastled.",
+      "prev_fen": "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+      "last_move": {
+        "uci": "b2b4",
+        "san": "b4"
+      },
+      "fen": "r1bqk1nr/pppp1ppp/2n5/2b1p3/1PB1P3/5N2/P1PP1PPP/RNBQK2R b KQkq - 0 4",
+      "candidates": [
+        [
+          "c6b4",
+          "Nxb4"
+        ],
+        [
+          "c5f2",
+          "Bxf2+"
+        ],
+        [
+          "c5b4",
+          "Bxb4"
+        ],
+        [
+          "d7d5",
+          "d5"
+        ],
+        [
+          "g8f6",
+          "Nf6"
+        ],
+        [
+          "d8h4",
+          "Qh4"
+        ],
+        [
+          "d7d6",
+          "d6"
+        ],
+        [
+          "c5e3",
+          "Be3"
+        ]
+      ]
+    },
+    {
+      "id": "mid-01",
+      "phase": "middlegame",
+      "tone_tag": "aggressive",
+      "message": "no more waiting. I'm breaking this open NOW",
+      "prior_tone": "A gambit was offered and taken; the game is tense.",
+      "prev_fen": "r1bqk1nr/pppp1ppp/2n5/b7/2BpP3/2P2N2/P4PPP/RNBQ1RK1 b kq - 1 7",
+      "last_move": {
+        "uci": "d7d6",
+        "san": "d6"
+      },
+      "fen": "r1bqk1nr/ppp2ppp/2np4/b7/2BpP3/2P2N2/P4PPP/RNBQ1RK1 w kq - 0 8",
+      "candidates": [
+        [
+          "d1d4",
+          "Qxd4"
+        ],
+        [
+          "f3d4",
+          "Nxd4"
+        ],
+        [
+          "c3d4",
+          "cxd4"
+        ],
+        [
+          "c4f7",
+          "Bxf7+"
+        ],
+        [
+          "c4e6",
+          "Be6"
+        ],
+        [
+          "c1b2",
+          "Bb2"
+        ],
+        [
+          "c1f4",
+          "Bf4"
+        ],
+        [
+          "c1g5",
+          "Bg5"
+        ]
+      ]
+    },
+    {
+      "id": "mid-02",
+      "phase": "middlegame",
+      "tone_tag": "confident",
+      "message": "everything is under control here",
+      "prior_tone": "White sacrificed material for a raging initiative.",
+      "prev_fen": "r1bqk1nr/ppp2ppp/2np4/b7/2BpP3/2P2N2/P4PPP/RNBQ1RK1 w kq - 0 8",
+      "last_move": {
+        "uci": "c3d4",
+        "san": "cxd4"
+      },
+      "fen": "r1bqk1nr/ppp2ppp/2np4/b7/2BPP3/5N2/P4PPP/RNBQ1RK1 b kq - 0 8",
+      "candidates": [
+        [
+          "c6d4",
+          "Nxd4"
+        ],
+        [
+          "g8f6",
+          "Nf6"
+        ],
+        [
+          "d8h4",
+          "Qh4"
+        ],
+        [
+          "c8f5",
+          "Bf5"
+        ],
+        [
+          "c8g4",
+          "Bg4"
+        ],
+        [
+          "c8e6",
+          "Be6"
+        ],
+        [
+          "g8e7",
+          "Nge7"
+        ],
+        [
+          "c8d7",
+          "Bd7"
+        ]
+      ]
+    },
+    {
+      "id": "mid-03",
+      "phase": "middlegame",
+      "tone_tag": "cautious",
+      "message": "careful now, one wrong step and I'm lost",
+      "prior_tone": "White's centre is huge and Black is a pawn up but loose.",
+      "prev_fen": "r1bqk1nr/ppp2ppp/2np4/b7/2BPP3/5N2/P4PPP/RNBQ1RK1 b kq - 0 8",
+      "last_move": {
+        "uci": "a5b6",
+        "san": "Bb6"
+      },
+      "fen": "r1bqk1nr/ppp2ppp/1bnp4/8/2BPP3/5N2/P4PPP/RNBQ1RK1 w kq - 1 9",
+      "candidates": [
+        [
+          "c4f7",
+          "Bxf7+"
+        ],
+        [
+          "b1c3",
+          "Nc3"
+        ],
+        [
+          "c4e6",
+          "Be6"
+        ],
+        [
+          "c1b2",
+          "Bb2"
+        ],
+        [
+          "c1f4",
+          "Bf4"
+        ],
+        [
+          "c1g5",
+          "Bg5"
+        ],
+        [
+          "c1a3",
+          "Ba3"
+        ],
+        [
+          "c1e3",
+          "Be3"
+        ]
+      ]
+    },
+    {
+      "id": "mid-04",
+      "phase": "middlegame",
+      "tone_tag": "playful",
+      "message": "she said \"you never take risks\" so here we go",
+      "prior_tone": "Both sides are dug in around the centre.",
+      "prev_fen": "rnbq1rk1/ppp1bpp1/4pn1p/3p4/2PP3B/2N1PN2/PP3PPP/R2QKB1R b KQ - 1 7",
+      "last_move": {
+        "uci": "b7b6",
+        "san": "b6"
+      },
+      "fen": "rnbq1rk1/p1p1bpp1/1p2pn1p/3p4/2PP3B/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8",
+      "candidates": [
+        [
+          "h4f6",
+          "Bxf6"
+        ],
+        [
+          "c3d5",
+          "Nxd5"
+        ],
+        [
+          "c4d5",
+          "cxd5"
+        ],
+        [
+          "f1d3",
+          "Bd3"
+        ],
+        [
+          "f1e2",
+          "Be2"
+        ],
+        [
+          "f3e5",
+          "Ne5"
+        ],
+        [
+          "e3e4",
+          "e4"
+        ],
+        [
+          "h4g3",
+          "Bg3"
+        ]
+      ]
+    },
+    {
+      "id": "mid-05",
+      "phase": "middlegame",
+      "tone_tag": "defensive",
+      "message": "I'll just shore up the king and wait you out",
+      "prior_tone": "A slow manoeuvring struggle with locked pawns.",
+      "prev_fen": "rnbq1rk1/p1p1bpp1/1p2pn1p/3p4/2PP3B/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8",
+      "last_move": {
+        "uci": "c4d5",
+        "san": "cxd5"
+      },
+      "fen": "rnbq1rk1/p1p1bpp1/1p2pn1p/3P4/3P3B/2N1PN2/PP3PPP/R2QKB1R b KQ - 0 8",
+      "candidates": [
+        [
+          "d8d5",
+          "Qxd5"
+        ],
+        [
+          "e6d5",
+          "exd5"
+        ],
+        [
+          "f6d5",
+          "Nxd5"
+        ],
+        [
+          "b8c6",
+          "Nc6"
+        ],
+        [
+          "c8b7",
+          "Bb7"
+        ],
+        [
+          "c8a6",
+          "Ba6"
+        ],
+        [
+          "b8d7",
+          "Nbd7"
+        ],
+        [
+          "f6e4",
+          "Ne4"
+        ]
+      ]
+    },
+    {
+      "id": "mid-06",
+      "phase": "middlegame",
+      "tone_tag": "sad",
+      "message": "I've already lost this, haven't I",
+      "prior_tone": "White holds a small, nagging edge.",
+      "prev_fen": "rnbq1rk1/p1p1bpp1/1p2pn1p/3P4/3P3B/2N1PN2/PP3PPP/R2QKB1R b KQ - 0 8",
+      "last_move": {
+        "uci": "f6d5",
+        "san": "Nxd5"
+      },
+      "fen": "rnbq1rk1/p1p1bpp1/1p2p2p/3n4/3P3B/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 9",
+      "candidates": [
+        [
+          "c3d5",
+          "Nxd5"
+        ],
+        [
+          "h4e7",
+          "Bxe7"
+        ],
+        [
+          "f1b5",
+          "Bb5"
+        ],
+        [
+          "f1c4",
+          "Bc4"
+        ],
+        [
+          "f1d3",
+          "Bd3"
+        ],
+        [
+          "f1e2",
+          "Be2"
+        ],
+        [
+          "f3e5",
+          "Ne5"
+        ],
+        [
+          "e3e4",
+          "e4"
+        ]
+      ]
+    },
+    {
+      "id": "mid-07",
+      "phase": "middlegame",
+      "tone_tag": "neutral",
+      "message": "playing on",
+      "prior_tone": "The queens are still on and nothing is resolved.",
+      "prev_fen": "rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN1B3/PPP2PPP/R2QKB1R b KQkq - 1 7",
+      "last_move": {
+        "uci": "f8e7",
+        "san": "Be7"
+      },
+      "fen": "rnbqk2r/1p2bppp/p2p1n2/4p3/4P3/1NN1B3/PPP2PPP/R2QKB1R w KQkq - 2 8",
+      "candidates": [
+        [
+          "d1d6",
+          "Qxd6"
+        ],
+        [
+          "f1a6",
+          "Bxa6"
+        ],
+        [
+          "b3c5",
+          "Nc5"
+        ],
+        [
+          "f1b5",
+          "Bb5+"
+        ],
+        [
+          "f1c4",
+          "Bc4"
+        ],
+        [
+          "e3b6",
+          "Bb6"
+        ],
+        [
+          "f1d3",
+          "Bd3"
+        ],
+        [
+          "d1d5",
+          "Qd5"
+        ]
+      ]
+    },
+    {
+      "id": "end-01",
+      "phase": "endgame",
+      "tone_tag": "aggressive",
+      "message": "your king has nowhere to run",
+      "prior_tone": "Everything came off and only the rooks remain.",
+      "prev_fen": null,
+      "last_move": null,
+      "fen": "6k1/5ppp/8/8/8/6P1/5P1P/R5K1 w - - 0 40",
+      "candidates": [
+        [
+          "a1a7",
+          "Ra7"
+        ],
+        [
+          "a1a8",
+          "Ra8#"
+        ],
+        [
+          "a1a6",
+          "Ra6"
+        ],
+        [
+          "a1d1",
+          "Rd1"
+        ],
+        [
+          "a1a5",
+          "Ra5"
+        ],
+        [
+          "a1e1",
+          "Re1"
+        ],
+        [
+          "f2f4",
+          "f4"
+        ],
+        [
+          "a1f1",
+          "Rf1"
+        ]
+      ]
+    },
+    {
+      "id": "end-02",
+      "phase": "endgame",
+      "tone_tag": "cautious",
+      "message": "one pawn at a time, no mistakes",
+      "prior_tone": "A long grind has left a pure pawn ending.",
+      "prev_fen": null,
+      "last_move": null,
+      "fen": "8/p5pp/8/3k4/3P4/8/P5PP/4K3 w - - 0 45",
+      "candidates": [
+        [
+          "h2h3",
+          "h3"
+        ],
+        [
+          "a2a3",
+          "a3"
+        ],
+        [
+          "h2h4",
+          "h4"
+        ],
+        [
+          "a2a4",
+          "a4"
+        ],
+        [
+          "g2g3",
+          "g3"
+        ],
+        [
+          "g2g4",
+          "g4"
+        ],
+        [
+          "e1f1",
+          "Kf1"
+        ],
+        [
+          "e1d1",
+          "Kd1"
+        ]
+      ]
+    },
+    {
+      "id": "end-03",
+      "phase": "endgame",
+      "tone_tag": "confident",
+      "message": "this is already won, I just have to count",
+      "prior_tone": "The extra pawn finally told.",
+      "prev_fen": null,
+      "last_move": null,
+      "fen": "8/8/4k3/8/3PK3/8/8/8 w - - 0 60",
+      "candidates": [
+        [
+          "e4f4",
+          "Kf4"
+        ],
+        [
+          "e4f3",
+          "Kf3"
+        ],
+        [
+          "e4e3",
+          "Ke3"
+        ],
+        [
+          "e4d3",
+          "Kd3"
+        ],
+        [
+          "d4d5",
+          "d5+"
+        ]
+      ]
+    },
+    {
+      "id": "end-04",
+      "phase": "endgame",
+      "tone_tag": "sad",
+      "message": "there's nothing left to play for",
+      "prior_tone": "Material is dead level and the position is dry.",
+      "prev_fen": null,
+      "last_move": null,
+      "fen": "5r2/6k1/8/8/8/8/5PPP/5RK1 b - - 2 38",
+      "candidates": [
+        [
+          "f8f2",
+          "Rxf2"
+        ],
+        [
+          "f8f3",
+          "Rf3"
+        ],
+        [
+          "f8f4",
+          "Rf4"
+        ],
+        [
+          "g7g8",
+          "Kg8"
+        ],
+        [
+          "f8e8",
+          "Re8"
+        ],
+        [
+          "f8d8",
+          "Rd8"
+        ],
+        [
+          "g7h8",
+          "Kh8"
+        ],
+        [
+          "f8f5",
+          "Rf5"
+        ]
+      ]
+    },
+    {
+      "id": "end-05",
+      "phase": "endgame",
+      "tone_tag": "defensive",
+      "message": "I'm not resigning, you'll have to prove it",
+      "prior_tone": "Black is a piece down but the king is active.",
+      "prev_fen": null,
+      "last_move": null,
+      "fen": "8/8/8/4k3/8/8/1B3PPP/6K1 b - - 4 41",
+      "candidates": [
+        [
+          "e5e6",
+          "Ke6"
+        ],
+        [
+          "e5d6",
+          "Kd6"
+        ],
+        [
+          "e5f5",
+          "Kf5"
+        ],
+        [
+          "e5d5",
+          "Kd5"
+        ],
+        [
+          "e5f4",
+          "Kf4"
+        ],
+        [
+          "e5e4",
+          "Ke4"
+        ]
+      ]
+    },
+    {
+      "id": "end-06",
+      "phase": "endgame",
+      "tone_tag": "playful",
+      "message": "let's see if you know this one",
+      "prior_tone": "A tricky queenless ending with pawns on both wings.",
+      "prev_fen": null,
+      "last_move": null,
+      "fen": "8/2p2pp1/8/8/8/1P6/P4PP1/4K1k1 w - - 0 52",
+      "candidates": [
+        [
+          "f2f4",
+          "f4"
+        ],
+        [
+          "f2f3",
+          "f3"
+        ],
+        [
+          "a2a3",
+          "a3"
+        ],
+        [
+          "a2a4",
+          "a4"
+        ],
+        [
+          "g2g3",
+          "g3"
+        ],
+        [
+          "g2g4",
+          "g4"
+        ],
+        [
+          "b3b4",
+          "b4"
+        ],
+        [
+          "e1d1",
+          "Kd1"
+        ]
+      ]
+    }
+  ]
+}
