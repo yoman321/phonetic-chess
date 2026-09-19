@@ -9,7 +9,7 @@ import chess
 
 from vendor import sunfish
 
-ENGINE_TOPN_DEFAULT = 15
+ENGINE_TOPN_DEFAULT = 8
 
 
 def _fen_to_sunfish_pos(fen):

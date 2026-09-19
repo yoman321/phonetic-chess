@@ -110,9 +110,12 @@ unconditionally on every row removed.
 
 **moves** — one row per ply, `PRIMARY KEY (session_id, ply)`, cascade-deleted with
 the session. Holds `uci`, `san`, and `tone_summary` — the rolling narrative the LLM
-maintains. `tone_summary` is NULL for dragged moves.
+maintains. `tone_summary` is NULL for dragged moves. LLM moves also save
+`player_text`, `pre_move_fen`, and `prior_tone` in the move transaction.
+Nullable `intent` and `rationale` cache the on-demand explanation. Manual and
+old moves have NULL context; analysis data is never used to backfill it.
 
-**llm_calls** — one row per invocation of `pick_move_with_llm`, keyed by an
+**llm_calls** — one row per committed LLM move, keyed by an
 identity `id`. It stores the session and target ply, request context, model and
 both retry limits, aggregate outcome and latency, and the parsed success fields.
 The outcome is `unexpected` from construction until a terminal `ok`, `exhausted`,
@@ -120,7 +123,12 @@ or `transport` result replaces it, so an unanticipated exit cannot make the row
 uninsertable and discard earlier attempt history.
 `session_id` intentionally has no foreign key: these records are retained as
 warehouse data even if a game is deleted. Indexes support session/ply, time, and
-outcome filtering.
+outcome filtering. Failed invocations and rolled-back moves create no new rows;
+historical failure rows remain. `intent` and `rationale` start NULL and may be
+copied after an explanation succeeds. `explain_requests` counts server requests,
+including cache hits; `explain_prompt_tokens`, `explain_completion_tokens`, and
+`explain_latency_ms` copy successful generation usage and latency. These writes
+are best effort. The game and LLM system never read analysis tables.
 
 **llm_call_attempts** — one row per content-loop attempt, keyed by `(call_id,
 attempt)` and cascade-deleted with its call. It separates content outcomes
@@ -154,6 +162,7 @@ All JSON. Errors are `{"error": "<code>", ...extra}` with the status carried on 
 | `POST /sessions/<sid>/join` | Claims a free color, or re-identifies an existing token; returns `opponentJoined` | `session_full` 409, `game_ended` 410 |
 | `POST /sessions/<sid>/move` | Plays an explicit UCI | `game_ended` 410, `not_your_turn` 403, `illegal_move` 400, `game_over` 409, `waiting_for_opponent_join` 409 |
 | `POST /sessions/<sid>/say` | Tone phrase → LLM-chosen move | `game_ended` 410, `llm_unavailable` 502, `llm_bad_response` 502, `waiting_for_opponent_join` 409 |
+| `POST /sessions/<sid>/moves/<ply>/explain` | Either player's token → stored or generated `intent` and `rationale` | `missing_token` 401, `not_a_player` 403, `not_found` 404, `explanation_unavailable` 409, `llm_unavailable` / `llm_bad_response` 502 |
 
 `ended` and `game_ended` are the idle deadline, not `status`: a game won by
 checkmate is over in a different sense and is reported through `status`. The read
@@ -176,7 +185,7 @@ Room name is `session:<sid>` (`helpers.py:17`).
   and given no reason.
 - **server → client** `move` — the full post-move payload: `fen`, `pgn`, `status`,
   `ply`, `uci`, `san`, `evalCp`, plus (say-moves only) `text`, `tone_summary`,
-  `intent`, `rationale`, `priorTone`.
+  `priorTone`. Explanations arrive only through the explanation route.
 - **server → client** `thinking` — `{on, side, status}` where status is `thinking`
   or `retrying`, driving the opponent's typing dots and the mover's own subscript.
   Emitted under a `finally`, so the `on:false` always arrives.
@@ -208,16 +217,16 @@ Same lock and ownership checks, then:
 1. **Alternation guard** — reads the last move; if the same side made it, reject with
    `waiting_for_opponent_move`. With no prior moves, only White may proceed.
 2. **Candidates** — `rank_moves` (`engine.py:88`) converts the FEN into a Sunfish
-   `Position`, scores every legal move with `pos.value(move)`, and returns the top 15
+   `Position`, scores every legal move with `pos.value(move)`, and returns the top 8
    as `(uci, san)` pairs. No search — piece-square deltas and capture bonuses only,
-   well under a millisecond. On any Sunfish failure it falls back to the first 15
-   legal moves; positions with ≤15 legal moves skip ranking entirely.
+   well under a millisecond. On any Sunfish failure it falls back to the first 8
+   legal moves; positions with ≤8 legal moves skip ranking entirely.
 3. **Broadcast `thinking`** so the opponent sees dots while the model works.
 4. **LLM** — `pick_move_with_llm` (`llm.py:135`) sends the prior tone summary, the
    opponent's last move, the new phrase, the FEN, and the candidate list. Response
-   is forced to `json_object` with `{uci, tone_summary, intent, rationale}`.
+   is forced to `json_object` with `{uci, tone_summary}`.
 5. **Validation** — the returned UCI is checked against **all legal moves**, not just
-   the 15 candidates. The candidate list is advisory by design: the prompt says
+   the 8 candidates. The candidate list is advisory by design: the prompt says
    "prefer one of the suggested moves… only pick a different legal UCI if no
    suggestion fits the tone at all," which lets the model play a deliberately
    off-beat move when the tone calls for it while keeping the default sound.
@@ -233,10 +242,28 @@ Same lock and ownership checks, then:
    latency, outcome, permitted raw content, token usage, the SDK's retry count
    when available, and the final parsed fields. The SDK and content-loop retry
    counts remain separate.
-8. Apply, persist the move with the new `tone_summary`, and close its transaction.
-   In a `finally`, open a fresh connection and atomically write the call and its
-   attempts. A logging failure is reported to the error logger but never changes
-   the move result or replaces an exception already in flight. Then emit the move.
+8. Apply, persist the move with the new `tone_summary` and explanation context,
+   and commit its transaction. Only after a successful commit, open a fresh
+   connection and atomically write the call and its attempts. A logging failure
+   is reported to the error logger but never changes the move result. Then emit
+   the move. Indicator cleanup still runs on every move path.
+
+### On-demand explanation
+
+`explain_move` authenticates either player and reads the requested `(session_id,
+ply)` from `moves`, without turn or last-mover checks. A cached answer returns
+immediately. A cache miss uses that move's saved message, pre-move FEN, prior
+tone, UCI and SAN with the LAZY prompt. Generation holds no session row lock.
+The answer is saved by updating only `moves.intent` and `moves.rationale`.
+Failures use the same LLM error codes as `say_move` and leave the game unchanged.
+Concurrent cache misses may generate twice; no shared invocation is guaranteed.
+
+`Chatbox` opens the card with prior tone already present, then shows loading,
+the answer, or a card-local error. `GameView` stores the answer on the message;
+closing and reopening a cached card makes no request. A failed card can retry.
+Each server request attempts an analysis counter update, and successful
+generation attempts a separate usage copy. Missing rows or failed analysis
+writes have no effect on the answer or cache.
 
 ### Tone as game state
 
@@ -244,8 +271,8 @@ Same lock and ownership checks, then:
 into a running one-or-two-sentence narrative of the game's mood, stored on the move
 row and read back on the next `say` (`moves.py:12`). It gives the model continuity
 without replaying the whole message history, so context stays flat-sized regardless
-of game length. `intent` and `rationale` are per-move and feed the "?" popover in
-the chat (`Chatbox.jsx:44`).
+of game length. `intent` and `rationale` are generated on demand per move and feed
+the "?" popover in the chat.
 
 ### LLM call metrics
 

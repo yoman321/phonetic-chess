@@ -132,8 +132,6 @@ export default function GameView() {
       text,
       ply,
       evalCp: cp,
-      intent,
-      rationale,
       priorTone,
     }) => {
       moveSeqRef.current += 1;
@@ -151,15 +149,11 @@ export default function GameView() {
           next.push({ from: mover, text });
         }
         if (text) {
-          const explanation =
-            intent || rationale || priorTone
-              ? { priorTone: priorTone || "", intent: intent || "", rationale: rationale || "" }
-              : undefined;
           next.push({
             from: "system",
             side: mover,
             text: `Move: ${san}`,
-            explanation,
+            explanation: { ply, priorTone: priorTone || "" },
           });
         } else if (mover !== color) {
           next.push({ from: "system", side: mover, text: `Opponent → ${san}` });
@@ -411,6 +405,15 @@ export default function GameView() {
         )}
         <Chatbox
           messages={messages}
+          sessionId={sessionId}
+          playerToken={playerToken}
+          onExplanationUpdate={(ply, update) => {
+            setMessages((current) => current.map((message) =>
+              message.explanation?.ply === ply
+                ? { ...message, explanation: { ...message.explanation, ...update } }
+                : message,
+            ));
+          }}
           draft={draft}
           setDraft={setDraft}
           onSend={handleSend}

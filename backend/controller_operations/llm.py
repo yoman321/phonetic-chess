@@ -155,7 +155,7 @@ def pick_move_with_llm(
         moves) to make the candidate list advisory rather than binding.
     prior_tone_summary: rolling summary of the game's tone so far (may be "").
     last_move: (uci, san) of the most recent move played, or None.
-    Returns (uci, tone_summary, intent, rationale). Retries on bad JSON or
+    Returns (uci, tone_summary). Retries on bad JSON or
     out-of-set UCI up to LLM_MAX_RETRIES times before raising the last error.
     """
     moves_listing = "\n".join(f"- {uci} ({san})" for uci, san in candidates)
@@ -175,15 +175,10 @@ def pick_move_with_llm(
         "playful. Use the prior tone summary as context — if the game has been calm "
         "and the new message is suddenly aggressive, the shift should show in the "
         "move. After choosing, write a SHORT (one or two sentences) updated tone "
-        "summary that folds the new message into the running narrative. Also write "
-        "a one-sentence 'intent' describing what the new message communicates, and "
-        "a one-sentence 'rationale' explaining why the chosen move expresses that "
-        "intent. "
+        "summary that folds the new message into the running narrative. "
         'Reply ONLY with JSON of the form '
         '{"uci": "<one of the legal UCIs>", '
-        '"tone_summary": "<updated rolling summary>", '
-        '"intent": "<one sentence: what the new message communicates>", '
-        '"rationale": "<one sentence: why this move expresses that intent>"}.'
+        '"tone_summary": "<updated rolling summary>"}.'
     )
     user = (
         f"Tone of the game so far: {prior_tone_summary or '(none yet)'}\n"
@@ -233,8 +228,6 @@ def pick_move_with_llm(
             parsed = json.loads(content)
             uci = (parsed.get("uci") or "").strip()
             tone_summary = (parsed.get("tone_summary") or "").strip()
-            intent = (parsed.get("intent") or "").strip()
-            rationale = (parsed.get("rationale") or "").strip()
             if uci not in valid_ucis:
                 raise ValueError(f"llm returned invalid uci: {uci!r}")
             off_list = uci not in {u for u, _ in candidates}
@@ -244,14 +237,14 @@ def pick_move_with_llm(
                     sdk_retries=sdk_retries, raw_content=content, usage=usage,
                 )
                 log.finish(
-                    "ok", chosen_uci=uci, off_list=off_list, intent=intent,
-                    rationale=rationale, tone_summary=tone_summary,
+                    "ok", chosen_uci=uci, off_list=off_list,
+                    tone_summary=tone_summary,
                 )
             logger.info(
                 "[llm] attempt %d/%d ok  uci=%s off_list=%s",
                 attempt + 1, LLM_MAX_RETRIES, uci, off_list,
             )
-            return uci, tone_summary, intent, rationale
+            return uci, tone_summary
         except (APIConnectionError, APITimeoutError, APIStatusError) as e:
             # SDK already retried 3 times — surface as TimeoutError so the
             # caller's (URLError, TimeoutError) handler maps it to the
@@ -312,4 +305,68 @@ def pick_move_with_llm(
     )
     if log is not None:
         log.finish("exhausted")
+    raise last_err
+
+
+def explain_move_with_llm(text, fen, prior_tone, uci, san):
+    """Explain a committed move; return (intent, rationale, usage)."""
+    system = (
+        "A chess move was chosen to express the emotional tone of a player's "
+        "message. Given the message, the position, and the move that was played, "
+        "write a one-sentence 'intent' describing what the message communicates, "
+        "and a one-sentence 'rationale' explaining why that move expresses it. "
+        'Reply ONLY with JSON of the form '
+        '{"intent": "<one sentence>", "rationale": "<one sentence>"}.'
+    )
+    user = (
+        f"Tone of the game so far: {prior_tone or '(none yet)'}\n"
+        f"Player message: {text}\n"
+        f"Position FEN before the move: {fen}\n"
+        f"Move played: {uci} ({san})"
+    )
+    last_err = None
+    for attempt in range(LLM_MAX_RETRIES):
+        try:
+            raw = _client.chat.completions.with_raw_response.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.7,
+                max_tokens=LLM_MAX_TOKENS,
+                extra_body={
+                    "reasoning_effort": LLM_REASONING_EFFORT,
+                    "reasoning_format": "hidden",
+                },
+            )
+            resp = raw.parse()
+            if not resp.choices or resp.choices[0].message.content is None:
+                raise _BadShapeError("llm response contained no message content")
+            parsed = json.loads(resp.choices[0].message.content)
+            if not isinstance(parsed, dict):
+                raise _BadShapeError("llm explanation must be a JSON object")
+            intent = parsed["intent"]
+            rationale = parsed["rationale"]
+            if not all(isinstance(value, str) and value.strip()
+                       for value in (intent, rationale)):
+                raise _BadShapeError("llm explanation fields must be non-empty strings")
+            return intent.strip(), rationale.strip(), resp.usage
+        except (APIConnectionError, APITimeoutError, APIStatusError) as e:
+            raise TimeoutError(str(e)) from e
+        except (ValueError, KeyError) as e:
+            last_err = e
+            logger.info(
+                "[llm explain] attempt %d/%d fail %s: %s",
+                attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e,
+            )
+        except Exception as e:
+            last_err = ValueError(str(e))
+            logger.info(
+                "[llm explain] attempt %d/%d fail %s: %s",
+                attempt + 1, LLM_MAX_RETRIES, type(e).__name__, e,
+            )
+        if attempt + 1 < LLM_MAX_RETRIES:
+            time.sleep(LLM_BACKOFF_BASE * (2 ** attempt))
     raise last_err

@@ -81,7 +81,7 @@ def test_say_move_is_accepted_once_both_players_joined(socketio, monkeypatch):
     """Control, tone path."""
     monkeypatch.setattr(
         sessions_ops, "pick_move_with_llm",
-        lambda *a, **k: ("d2d4", "eager", "attack", "because"),
+        lambda *a, **k: ("d2d4", "eager"),
     )
     cursor = _cursor()
 

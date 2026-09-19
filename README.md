@@ -32,15 +32,23 @@ per-move engine cost is negligible next to the network call.
 
 1. A player types something like *"play it safe"* or *"go for the throat."*
 2. The backend ranks every legal move with a vendored **Sunfish** static eval and
-   takes the top ~15 candidates.
-3. Those candidates plus board context are sent to **Groq (Qwen3.6 27B)**, which
-   returns the move whose character best fits the phrase, along with a short
-   rationale.
+   takes up to eight candidates.
+3. Those candidates plus board context are sent to **Groq (Qwen3.8 27B)**, which
+   returns the move whose character best fits the phrase and an updated tone.
 4. The move is applied, persisted, and broadcast to both players over WebSockets;
-   the opponent sees a "?" popover explaining the intent behind the move.
-5. Every LLM call is logged to Postgres — what was asked, what came back, each
-   retry and why it failed, latency and token counts. Metrics come out of a
-   `llm_call_metrics` view; there is no dashboard and no endpoint, just SQL.
+   either player can press "?" to ask for its explanation. The answer is saved
+   with the move and reused on later requests.
+5. Committed LLM moves are logged to Postgres for personal analysis, including
+   their retries, latency and token counts. Failed or rolled-back moves create
+   no new analysis rows. Logging can fail without changing the game. Metrics
+   come out of a `llm_call_metrics` view; there is no dashboard, just SQL.
+
+`POST /sessions/<sid>/moves/<ply>/explain` takes `{"playerToken": "..."}` and
+returns `intent` and `rationale`. The move's `player_text`, `pre_move_fen`, and
+`prior_tone` are saved atomically in `moves`; the cached answer also lives there.
+Manual and old moves without saved context return `explanation_unavailable`.
+The game and explanation feature never read analysis tables. Request counts,
+explanation usage and latency are optional copies in `llm_calls`.
 
 The candidate list is advisory — the model may pick any legal move — so it can
 choose a slightly "off" move when that better fits an unusual tone, while the

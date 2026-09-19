@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS moves (
 
 CREATE INDEX IF NOT EXISTS idx_moves_session_id ON moves(session_id);
 
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS player_text TEXT;
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS pre_move_fen TEXT;
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS prior_tone TEXT;
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS intent TEXT;
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS rationale TEXT;
+
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_disconnected_at TIMESTAMPTZ;
 
 -- Narrows the CHECK above on a database that already exists, which
@@ -94,6 +100,11 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 ALTER TABLE llm_calls DROP CONSTRAINT IF EXISTS llm_calls_outcome_check;
 ALTER TABLE llm_calls ADD CONSTRAINT llm_calls_outcome_check
     CHECK (outcome IN ('ok', 'exhausted', 'transport', 'unexpected'));
+
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS explain_requests INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS explain_prompt_tokens INTEGER;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS explain_completion_tokens INTEGER;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS explain_latency_ms INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_llm_calls_session
     ON llm_calls(session_id, ply);

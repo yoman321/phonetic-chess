@@ -64,3 +64,19 @@ export async function postSay(sessionId, text, playerToken) {
   }
   return res.json();
 }
+
+export async function explainMove(sessionId, ply, playerToken) {
+  const res = await fetch(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/moves/${ply}/explain`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerToken }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `explainMove failed: ${res.status}`);
+  }
+  return res.json();
+}

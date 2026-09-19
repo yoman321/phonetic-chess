@@ -1,9 +1,13 @@
 import { useState } from "react";
 import Avatar from "../Avatar/Avatar";
+import { explainMove } from "../../api";
 import "./Chatbox.css";
 
 export default function Chatbox({
   messages,
+  sessionId,
+  playerToken,
+  onExplanationUpdate,
   draft,
   setDraft,
   onSend,
@@ -19,6 +23,22 @@ export default function Chatbox({
   const thinkingLabel =
     thinkingStatus === "retrying" ? "wrong move, retrying" : "thinking";
   const [openIdx, setOpenIdx] = useState(null);
+  const toggleExplanation = async (message, index) => {
+    if (openIdx === index) {
+      setOpenIdx(null);
+      return;
+    }
+    setOpenIdx(index);
+    const { ply, intent, rationale } = message.explanation;
+    if (intent !== undefined && rationale !== undefined) return;
+    onExplanationUpdate(ply, { loading: true, error: null });
+    try {
+      const answer = await explainMove(sessionId, ply, playerToken);
+      onExplanationUpdate(ply, { ...answer, loading: false, error: null });
+    } catch (error) {
+      onExplanationUpdate(ply, { loading: false, error: error.message });
+    }
+  };
   return (
     <aside className="chat-pane">
       <div className="chat-log">
@@ -39,7 +59,7 @@ export default function Chatbox({
                     <button
                       type="button"
                       className="explain-btn"
-                      onClick={() => setOpenIdx(isOpen ? null : i)}
+                      onClick={() => toggleExplanation(m, i)}
                       aria-expanded={isOpen}
                       aria-label="Why this move?"
                     >
@@ -53,6 +73,8 @@ export default function Chatbox({
                       <strong>Prior tone:</strong>{" "}
                       {m.explanation.priorTone || "—"}
                     </div>
+                    {m.explanation.loading && <div role="status">Loading explanation…</div>}
+                    {m.explanation.error && <div role="alert">{m.explanation.error}</div>}
                     <div className="explain-row">
                       <strong>Message intent:</strong>{" "}
                       {m.explanation.intent || "—"}

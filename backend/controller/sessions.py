@@ -41,4 +41,11 @@ def make_sessions_bp(db, socketio):
         token = data.get("playerToken")
         return jsonify(sessions_ops.say_move(db, socketio, sid, text, token))
 
+    @bp.post("/sessions/<sid>/moves/<int:ply>/explain")
+    def explain_move(sid, ply):
+        data = request.get_json(silent=True) or {}
+        return jsonify(
+            sessions_ops.explain_move(db, sid, ply, data.get("playerToken"))
+        )
+
     return bp

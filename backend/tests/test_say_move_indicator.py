@@ -47,8 +47,7 @@ def _assert_balanced(socketio):
 
 
 def test_indicator_clears_on_success(socketio, monkeypatch):
-    _say(socketio, monkeypatch,
-         llm=lambda *a, **k: ("e2e4", "eager", "attack", "because"))
+    _say(socketio, monkeypatch, llm=lambda *a, **k: ("e2e4", "eager"))
     _assert_balanced(socketio)
 
 
@@ -79,7 +78,7 @@ def test_indicator_clears_when_the_move_write_fails(socketio, monkeypatch):
     transaction."""
     with pytest.raises(RuntimeError):
         _say(socketio, monkeypatch,
-             llm=lambda *a, **k: ("e2e4", "eager", "attack", "because"),
+             llm=lambda *a, **k: ("e2e4", "eager"),
              fail_on="INSERT INTO moves")
     _assert_balanced(socketio)
 

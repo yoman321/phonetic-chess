@@ -176,7 +176,7 @@ def no_llm(monkeypatch):
 
     def _spy(*args, **kwargs):
         calls.append((args, kwargs))
-        return ("e2e4", "tone", "intent", "rationale")
+        return ("e2e4", "tone")
 
     monkeypatch.setattr(sessions_ops, "pick_move_with_llm", _spy)
     return calls

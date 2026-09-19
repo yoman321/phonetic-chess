@@ -12,6 +12,14 @@ call shape has not been changed yet. `retries_taken` is only reachable through
 the raw wrapper, so the one gate that asserts it is the one that pins the shape.
 
 Nothing here imports `queries.llm_calls` (invariant 13).
+
+Amended by plans/input-tokens-lazy-explanations.md, frozen 2026-09-18: the log
+is a personal analysis record, written only for an LLM move whose game
+transaction committed. A failed call, a transport error and a rolled-back move
+each leave no row at all. The gates that used to require a row on those paths
+now require none — that is the same invariant read from the other side, not a
+relaxation: each still drives the whole path and still asserts the board did
+not move.
 """
 import contextlib
 import json
@@ -79,10 +87,14 @@ def _raises(error):
     return _Step(error=error)
 
 
-def _json_reply(uci, tone="wary", intent="an intent", rationale="a rationale"):
-    return json.dumps({
-        "uci": uci, "tone_summary": tone, "intent": intent, "rationale": rationale,
-    })
+def _json_reply(uci, tone="wary"):
+    """The lean move reply: two fields, and nothing the `?` panel would use."""
+    return json.dumps({"uci": uci, "tone_summary": tone})
+
+
+def _explain_reply(intent="an intent", rationale="a rationale"):
+    """What the on-demand explanation call answers with."""
+    return json.dumps({"intent": intent, "rationale": rationale})
 
 
 def _connection_error():
@@ -106,20 +118,26 @@ class _RawResponse:
 
 
 class _Completions:
+    """The scripted client. `kwargs` keeps every request it was handed, so a
+    gate can assert what was actually asked of the model — which prompt shape
+    is half of this plan."""
+
     def __init__(self, script):
         self._script = list(script)
         self.calls = 0
+        self.kwargs = []
 
-    def _step(self):
+    def _step(self, kwargs):
         self.calls += 1
+        self.kwargs.append(kwargs)
         assert self._script, "the client was called more times than the script allows"
         step = self._script.pop(0)
         if step.error is not None:
             raise step.error
         return step
 
-    def create(self, **_kwargs):
-        return self._step().completion
+    def create(self, **kwargs):
+        return self._step(kwargs).completion
 
     @property
     def with_raw_response(self):
@@ -130,8 +148,8 @@ class _RawCompletions:
     def __init__(self, outer):
         self._outer = outer
 
-    def create(self, **_kwargs):
-        step = self._outer._step()
+    def create(self, **kwargs):
+        step = self._outer._step(kwargs)
         return _RawResponse(step.completion, step.sdk_retries)
 
 
@@ -299,9 +317,12 @@ def test_a_clean_call_writes_one_call_row_and_one_attempt(
     assert call["max_retries"] == llm.LLM_MAX_RETRIES
     assert call["sdk_max_retries"] == llm._client.max_retries
     assert call["candidate_ucis"] == _candidates()
-    assert call["intent"] == "an intent"
-    assert call["rationale"] == "a rationale"
     assert call["tone_summary"] == "wary"
+    assert call["intent"] is None, (
+        "the move call no longer asks for an explanation, so the analysis row "
+        "has none to copy"
+    )
+    assert call["rationale"] is None
 
     rows = _attempts(pgdb, call["id"])
     assert len(rows) == 1
@@ -404,10 +425,10 @@ def test_unparseable_json_is_bad_json_and_never_invalid_uci(
 
 # --- invariant 3 ------------------------------------------------------------
 
-def test_an_exhausted_call_is_logged_and_the_board_does_not_move(
+def test_an_exhausted_call_writes_no_row_and_the_board_does_not_move(
     app_module, pgdb, game, monkeypatch
 ):
-    """Invariant 3 — the failure that mattered most and was recorded least."""
+    """Success-only logging. No move committed, so there is nothing to record."""
     session = game("log-exhausted")
     _script(monkeypatch, _says(_json_reply("e2e5")), _says(_json_reply("e2e5")),
             max_retries=2)
@@ -416,25 +437,18 @@ def test_an_exhausted_call_is_logged_and_the_board_does_not_move(
     assert response.status_code == 502
     assert response.get_json()["error"] == "llm_bad_response"
 
-    calls = _calls(pgdb, session["sid"])
-    assert len(calls) == 1
-    assert calls[0]["outcome"] == "exhausted"
-    assert calls[0]["attempts"] == 2
-    assert calls[0]["chosen_uci"] is None
-    assert [r["outcome"] for r in _attempts(pgdb, calls[0]["id"])] == [
-        "invalid_uci", "invalid_uci",
-    ]
+    assert _calls(pgdb, session["sid"]) == []
     assert _moves(pgdb, session["sid"]) == []
     assert _fen(pgdb, session["sid"]) == START_FEN
 
 
 # --- invariant 4 ------------------------------------------------------------
 
-def test_a_transport_failure_is_logged_with_an_unknown_sdk_count(
+def test_a_transport_failure_writes_no_row(
     app_module, pgdb, game, monkeypatch
 ):
-    """Invariant 4. NULL means unknown — writing 3 there would be a guess
-    dressed up as a measurement, and 0 would be a lie."""
+    """Success-only logging, transport arm. The player still gets the mapped
+    error; the analysis tables stay empty."""
     session = game("log-transport")
     _script(monkeypatch, _raises(_connection_error()))
 
@@ -442,33 +456,22 @@ def test_a_transport_failure_is_logged_with_an_unknown_sdk_count(
     assert response.status_code == 502
     assert response.get_json()["error"] == "llm_unavailable"
 
-    calls = _calls(pgdb, session["sid"])
-    assert len(calls) == 1
-    assert calls[0]["outcome"] == "transport"
-    rows = _attempts(pgdb, calls[0]["id"])
-    assert len(rows) == 1
-    assert rows[0]["outcome"] == "transport"
-    assert rows[0]["sdk_retries"] is None
-    assert rows[0]["status_code"] is None, "a dropped connection has no status"
+    assert _calls(pgdb, session["sid"]) == []
     assert _moves(pgdb, session["sid"]) == []
+    assert _fen(pgdb, session["sid"]) == START_FEN
 
 
 # --- invariants 14, 15 and 16 ----------------------------------------------
 
 @pytest.mark.parametrize("status", [429, 408, 409, 500, 503])
-def test_a_provider_http_error_is_logged_with_its_status(
+def test_a_provider_http_error_writes_no_row(
     app_module, pgdb, game, monkeypatch, status
 ):
-    """Invariant 14.
+    """Invariant 14, under success-only logging.
 
-    Today every one of these except 429 escapes unmapped and the player gets a
-    bare 500 with nothing written down. The status goes in its own column so
-    "how often is Groq rate-limiting us" is a GROUP BY and not a LIKE over
-    error_detail.
-
-    One attempt, not LLM_MAX_RETRIES: the SDK has already retried this up to
-    sdk_max_retries times, and a loop retry would multiply requests against a
-    provider that is already failing.
+    The mapping still has to hold — every one of these is `llm_unavailable` and
+    a 502, not a bare 500 — but no move committed, so nothing is recorded. The
+    status column keeps its meaning for the rows that do get written.
     """
     session = game(f"log-http-{status}")
     _script(monkeypatch, _raises(_status_error(status)))
@@ -477,17 +480,9 @@ def test_a_provider_http_error_is_logged_with_its_status(
     assert response.status_code == 502
     assert response.get_json()["error"] == "llm_unavailable"
 
-    calls = _calls(pgdb, session["sid"])
-    assert len(calls) == 1
-    assert calls[0]["outcome"] == "transport"
-    assert calls[0]["attempts"] == 1
-
-    rows = _attempts(pgdb, calls[0]["id"])
-    assert len(rows) == 1
-    assert rows[0]["outcome"] == "transport"
-    assert rows[0]["status_code"] == status
-    assert rows[0]["sdk_retries"] is None
+    assert _calls(pgdb, session["sid"]) == []
     assert _moves(pgdb, session["sid"]) == []
+    assert _fen(pgdb, session["sid"]) == START_FEN
 
 
 @pytest.mark.parametrize("shape", ["no_content", "no_choices"])
@@ -522,7 +517,8 @@ def test_a_call_that_only_ever_returns_no_content_is_exhausted(
     app_module, pgdb, game, monkeypatch
 ):
     """Invariant 15's tail: bad_shape exhausts like any other content failure,
-    which is llm_bad_response and not llm_unavailable."""
+    which is llm_bad_response and not llm_unavailable — and, under success-only
+    logging, writes no row."""
     session = game("log-bad-shape-exhausted")
     _script(monkeypatch, _says(None), _says(None), max_retries=2)
 
@@ -530,31 +526,32 @@ def test_a_call_that_only_ever_returns_no_content_is_exhausted(
     assert response.status_code == 502
     assert response.get_json()["error"] == "llm_bad_response"
 
-    call = _calls(pgdb, session["sid"])[0]
-    assert call["outcome"] == "exhausted"
-    assert [r["outcome"] for r in _attempts(pgdb, call["id"])] == [
-        "bad_shape", "bad_shape",
-    ]
+    assert _calls(pgdb, session["sid"]) == []
     assert _moves(pgdb, session["sid"]) == []
 
 
 # --- invariants 6 and 7 -----------------------------------------------------
 
-def test_the_row_survives_the_rolled_back_move(
+def test_a_rolled_back_move_writes_no_row(
     app_module, pgdb, game, monkeypatch
 ):
-    """Invariant 6 — the LLM call happened, so it is logged, even though the
-    transaction that would have held the write rolled back."""
+    """The decision that replaced invariant 6.
+
+    A successful LLM reply is not a successful move. The move write failed and
+    the transaction rolled back, so the analysis tables must show nothing: a row
+    here would count a move that was never played.
+
+    This is the gate the persister's placement turns on. Writing from the outer
+    `finally` — which runs whether the transaction committed or rolled back —
+    passes the old gate and fails this one.
+    """
     session = game("log-rollback")
     _script(monkeypatch, _says(_json_reply("e2e4")))
 
     with _inserts_fail(pgdb, "moves"):
         assert _say(app_module, session).status_code == 500
 
-    calls = _calls(pgdb, session["sid"])
-    assert len(calls) == 1
-    assert calls[0]["outcome"] == "ok"
-    assert calls[0]["chosen_uci"] == "e2e4"
+    assert _calls(pgdb, session["sid"]) == []
     assert _moves(pgdb, session["sid"]) == []
     assert _fen(pgdb, session["sid"]) == START_FEN
 
@@ -709,54 +706,56 @@ def _backend_count(pgdb):
 
 SAYS = 4                      # one to settle the baseline, three to measure
 LOG_CONN_PATHS = {
-    # outcome -> the steps one say_move consumes, at LLM_MAX_RETRIES = 3
-    "ok":        lambda: [_says(_json_reply("e2e4"))],
-    "exhausted": lambda: [_says(_json_reply("e2e5"))] * 3,
-    "transport": lambda: [_raises(_connection_error())],
+    # path -> (the steps one say_move consumes at LLM_MAX_RETRIES = 3,
+    #          rows that path must leave behind under success-only logging)
+    "ok":        ([_says(_json_reply("e2e4"))], 1),
+    "exhausted": ([_says(_json_reply("e2e5"))] * 3, 0),
+    "transport": ([_raises(_connection_error())], 0),
 }
 
 
-@pytest.mark.parametrize("expected_outcome", sorted(LOG_CONN_PATHS))
+@pytest.mark.parametrize("path", sorted(LOG_CONN_PATHS))
 def test_the_log_connection_is_gone_between_requests(
-    app_module, pgdb, game, monkeypatch, expected_outcome
+    app_module, pgdb, game, monkeypatch, path
 ):
     """Invariant 12's second half: `pg_stat_activity` shows no connection
     belonging to this feature between requests.
 
     Invariant 8 gates the connection count *while* a call is parked; this gates
-    what is still there once it has returned. `_persist_call_log` opens its own
+    what is still there once it has returned. The persister opens its own
     connection after the move transaction closed, so a `with db()` that did not
     close — or a pool this feature introduced — leaves a backend behind that no
-    later request reuses. All three terminal outcomes are driven, because the
-    persistence path is reached from a `finally` on every one of them and a
-    connection leaked on a failure path is the one nobody would notice.
+    later request reuses. All three terminal paths are driven: under
+    success-only logging two of them must write nothing, and a path that opens
+    a connection and then decides not to write is exactly where a leak hides.
 
     One session per say, always: on the `ok` path the first move advances the
     board and a second white say would be refused before the LLM, writing no
     row and measuring nothing. Sessions are inserted on the test's own
     connection, so making four of them does not move the count being read.
     """
-    steps = LOG_CONN_PATHS[expected_outcome]() * SAYS
-    _script(monkeypatch, *steps, max_retries=3)
-    sessions = [
-        game(f"log-conn-{expected_outcome}-{n}") for n in range(SAYS)
-    ]
+    steps, rows_per_say = LOG_CONN_PATHS[path]
+    _script(monkeypatch, *(steps * SAYS), max_retries=3)
+    sessions = [game(f"log-conn-{path}-{n}") for n in range(SAYS)]
 
     # Settle first: app import, engine warm-up and the session INSERT all touch
     # the database, so the baseline has to be read after a say_move has already
     # run rather than before the first one.
     _say(app_module, sessions[0])
     first = _calls(pgdb, sessions[0]["sid"])
-    assert len(first) == 1 and first[0]["outcome"] == expected_outcome
+    assert len(first) == rows_per_say
+    if rows_per_say:
+        assert first[0]["outcome"] == "ok"
     baseline = _backend_count(pgdb)
 
     for session in sessions[1:]:
         _say(app_module, session)
 
     logged = [len(_calls(pgdb, s["sid"])) for s in sessions]
-    assert logged == [1] * SAYS, (
-        f"rows per say was {logged}; every request must have reached the log, "
-        "or this gate proves nothing"
+    assert logged == [rows_per_say] * SAYS, (
+        f"rows per say was {logged}, expected {rows_per_say} each; the "
+        "persistence path was not reached the same way every time, so this "
+        "gate proves nothing"
     )
     leaked = _backend_count(pgdb) - baseline
     assert leaked == 0, (
@@ -835,7 +834,7 @@ def test_a_call_that_only_ever_ends_unexpectedly_is_exhausted(
     app_module, pgdb, game, monkeypatch
 ):
     """Retried like a content failure means exhausting like one: the player sees
-    `llm_bad_response`, 502, and the board does not move."""
+    `llm_bad_response`, 502, the board does not move, and nothing is logged."""
     session = game("log-unexpected-exhausted")
     _script(monkeypatch, *[_says('"e2e4"')] * 3, max_retries=3)
 
@@ -843,10 +842,7 @@ def test_a_call_that_only_ever_ends_unexpectedly_is_exhausted(
     assert response.status_code == 502
     assert response.get_json()["error"] == "llm_bad_response"
 
-    call = _calls(pgdb, session["sid"])[0]
-    assert call["outcome"] == "exhausted"
-    assert call["attempts"] == 3
-    assert [r["outcome"] for r in _attempts(pgdb, call["id"])] == ["unexpected"] * 3
+    assert _calls(pgdb, session["sid"]) == []
     assert _moves(pgdb, session["sid"]) == []
     assert _fen(pgdb, session["sid"]) == START_FEN
 

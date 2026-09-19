@@ -14,6 +14,7 @@ vi.mock("../../api", () => ({
   joinSession: (...a) => api.current.joinSession(...a),
   postMove: (...a) => api.current.postMove(...a),
   postSay: (...a) => api.current.postSay(...a),
+  explainMove: (...a) => api.current.explainMove(...a),
 }));
 // react-chessboard needs a real layout to render; the board's position is the
 // only thing these tests read, so stand in for it with an element that carries
@@ -135,6 +136,9 @@ beforeEach(() => {
       .mockResolvedValue({ color: "white", playerToken: "tok-white" }),
     postMove: vi.fn().mockResolvedValue({}),
     postSay: vi.fn().mockResolvedValue({}),
+    // Phase 3: the `?` panel fetches. Every move message these tests push
+    // carries one, so the mock has to answer or the panel throws on open.
+    explainMove: vi.fn().mockResolvedValue({ intent: "", rationale: "" }),
   };
   sessionStorage.clear();
 });

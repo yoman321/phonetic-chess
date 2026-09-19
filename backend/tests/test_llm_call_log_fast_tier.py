@@ -3,12 +3,17 @@
 Two halves, and they fail for different reasons.
 
 The first is that `say_move` still runs with no Postgres anywhere. The logging
-write is the one place in this feature that opens a connection of its own, and
-it opens it from a `finally` that runs on every path out, so a fast-tier test
-that never asked for a database would start reaching for one the moment that
-`finally` stopped going through the injected factory. `psycopg.connect` is
+write is the one place in this feature that opens a connection of its own, so a
+fast-tier test that never asked for a database would start reaching for one the
+moment it stopped going through the injected factory. `psycopg.connect` is
 replaced with something that raises, which is what a developer with no
 `testdb.sh` running has anyway — only loud instead of a 30-second timeout.
+
+Amended by plans/input-tokens-lazy-explanations.md, frozen 2026-09-18: only a
+committed LLM move is logged, so the failed-path gate now asserts that the
+failure writes nothing at all. Its point is unchanged — the failure path must
+not reach for a connection of its own — and it is now the stronger claim, since
+a path that writes nothing cannot connect at all.
 
 The second is the import rule the other two gate files state in prose and
 neither asserts: no test file imports `queries.llm_calls`. A test that reaches
@@ -35,22 +40,25 @@ def _records(outcome, uci="e2e4", raise_with=None):
     does, then optionally raises.
 
     The fakes the other fast-tier files use ignore `log=` and so leave a
-    `CallLog` with no attempts, which `_persist_call_log` correctly declines to
-    write. That is the right behaviour and it is useless here: reaching the
-    write is the whole point of these two gates.
+    `CallLog` with no attempts, which the persister correctly declines to write.
+    That is the right behaviour and it is useless here: reaching the write is
+    the whole point of these two gates.
+
+    Returns two values — `uci` and `tone_summary` — which is the whole contract
+    after this plan. A fake still returning four would make every caller unpack
+    wrongly and every gate below fail for the wrong reason.
     """
     def _fake(*_a, log=None, **_k):
         if log is not None:
             log.add_attempt(1, outcome, time.monotonic())
             if outcome == "ok":
                 log.finish(outcome, chosen_uci=uci, off_list=False,
-                           intent="an intent", rationale="a rationale",
                            tone_summary="eager")
             else:
                 log.finish(outcome)
         if raise_with is not None:
             raise raise_with
-        return (uci, "eager", "an intent", "a rationale")
+        return (uci, "eager")
 
     return _fake
 
@@ -88,18 +96,25 @@ def no_database(monkeypatch):
 
 
 def test_a_logged_say_move_needs_no_database(socketio, no_database, monkeypatch):
-    """The success path. The log write runs, and every statement it issues goes
-    to the cursor the operation was handed."""
+    """The success path, and the control for the gate below: a committed move
+    *is* logged, and every statement the write issues goes to the cursor the
+    operation was handed."""
     cursor = _say(socketio, monkeypatch, llm=_records("ok"))
     assert _logged(cursor), (
         "the log write never ran, so this says nothing about where it connects"
     )
 
 
-def test_a_failed_say_move_needs_no_database(socketio, no_database, monkeypatch):
-    """The `finally` path. The log write runs after the move has already
-    raised, which is the path that must not reach for a connection of its own,
-    and the one a passing success case would not cover."""
+def test_a_failed_say_move_writes_no_log_and_needs_no_database(
+    socketio, no_database, monkeypatch
+):
+    """Success-only logging, on the path that used to write.
+
+    The LLM call failed, so no move committed and nothing is recorded — not
+    through the injected cursor, and not through a connection of its own. The
+    `no_database` fixture covers the second half: a persister that still runs
+    here and opens its own connection fails loudly rather than quietly.
+    """
     fake = _records("transport", raise_with=TimeoutError("groq down"))
     cursor = FakeCursor(fake_session_row(), None)
     monkeypatch.setattr(sessions_ops, "pick_move_with_llm", fake)
@@ -111,7 +126,9 @@ def test_a_failed_say_move_needs_no_database(socketio, no_database, monkeypatch)
         )
 
     assert excinfo.value.code == "llm_unavailable"
-    assert _logged(cursor), "the failed call was never logged"
+    assert _logged(cursor) == [], (
+        "a failed LLM call left an analysis row; only a committed move is logged"
+    )
 
 
 def _imported_modules(path):

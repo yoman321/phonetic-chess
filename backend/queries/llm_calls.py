@@ -1,6 +1,29 @@
 """SQL queries against the LLM call log tables."""
 
 
+def increment_explain_requests(cur, session_id, ply):
+    cur.execute(
+        "UPDATE llm_calls SET explain_requests = explain_requests + 1 "
+        "WHERE session_id = %s AND ply = %s AND outcome = 'ok'",
+        (session_id, ply),
+    )
+
+
+def save_explanation(cur, session_id, ply, intent, rationale, usage, latency_ms):
+    cur.execute(
+        "UPDATE llm_calls SET intent = %s, rationale = %s, "
+        "explain_prompt_tokens = %s, explain_completion_tokens = %s, "
+        "explain_latency_ms = %s "
+        "WHERE session_id = %s AND ply = %s AND outcome = 'ok'",
+        (
+            intent, rationale,
+            usage.prompt_tokens if usage is not None else None,
+            usage.completion_tokens if usage is not None else None,
+            latency_ms, session_id, ply,
+        ),
+    )
+
+
 def insert_call(cur, record):
     """Insert one completed LLM call and return its generated id."""
     cur.execute(

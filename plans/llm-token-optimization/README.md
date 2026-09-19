@@ -21,6 +21,7 @@ README.md                   this index, headline findings, how to reproduce
 08-reliability.md           what is solid, what is not, open questions
 09-model-and-max-tokens.md  READ FIRST — model decision + the dead-model outage
 10-kv-caching.md            open question: prefix caching, and shortening the prefix
+11-after-lazy.md            results after the shorter move prompt and lazy explanations
 scripts/                    the scripts that produced the numbers
 ```
 
@@ -117,3 +118,7 @@ backend/scripts/testdb.sh down
 
 The A/B and lookback scripts need no database; they call Groq directly and print
 their own tables. All three read `GROQ_API_KEY` from `backend/.env`.
+
+`lazy_test.py` and `lookback_test.py` snapshot the old prompt. They do not import
+the current prompt and should not be used to measure the shipped implementation.
+The results above remain historical; see `11-after-lazy.md` for the new run.

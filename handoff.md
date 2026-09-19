@@ -1,47 +1,45 @@
 # Handoff
-<!-- role: maintenance (not one of AGENTS.md §1's roles) | model: claude-opus-5 | base: 337410aa37dfda94fb92295144780e2a7581d82b | date: 2026-09-18 -->
+<!-- role: Review the build | model: claude-opus-5 | base: b2889abb7506c69214f86b6a2451d6a3bc59d61d | date: 2026-09-18 -->
 
-Feature:  llm-model-outage      Plan: none — see plans/llm-token-optimization/09-model-and-max-tokens.md      Status: n/a
+Feature:  input-tokens-lazy-explanations      Plan: plans/input-tokens-lazy-explanations.md      Status: frozen
+Phase:    4 of 4 — done
 
-Phase:    2 of 2 — model default changed; max_tokens now set
-
-State:    Both changes from `09-model-and-max-tokens.md` are now in the tree.
-          `LLM_MODEL` defaults to `qwen/qwen3.8-27b`, and
-          `pick_move_with_llm` now passes `max_tokens=LLM_MAX_TOKENS` in the
-          `chat.completions.with_raw_response.create` call
-          (`backend/controller_operations/llm.py:215`). `LLM_MAX_TOKENS` is a
-          new module-level constant, `os.environ.get("LLM_MAX_TOKENS", "400")`.
-          Documented in `.env.example:15-16`, `README.md:138-140` and
-          `docs/architecture.md:399-402`.
-          The value was set to 200 earlier in this session at the user's
-          request, then changed to 400 by the user on 2026-09-18 — matching the
-          researched value, which was verified live over 10 moves at one
-          position family with no truncation. Measured visible replies run
-          84-102 tokens, so 400 is roughly 4x headroom. A reply that exceeds
-          the cap is truncated, is invalid JSON, logs `bad_json` and burns all
-          three `LLM_MAX_RETRIES` attempts.
-Next:     Gate the value. Run real late-game positions, where `tone_summary`
-          and `rationale` run longest, and confirm no truncation at 400. It is
-          an env var now, so a change needs no code edit.
+State:    The feature is done. All four phases are built, every gate is green, and the
+          human ran the manual browser test on 2026-09-18 and reported it passing.
+          Human decision on 2026-09-18: disregard every Build review finding. The two
+          findings in "## Build review" are still written as [open] in the plan file,
+          because only a human may change a finding's state. Their text is the record;
+          the decision is here. Flip them to [rejected] if you want the file to match.
+Next:     Nothing for this feature. Start the next token-optimization feature, the
+          output-token work named in plans/llm-token-optimization/. The deferred items
+          are the board.parse_san() retry fix and shortening the system prompt.
 Blocked:  none.
-Gates:    102/102 backend, 6/6 frontend. Failing: none.
-Verified: (cd backend && .venv/bin/python -c "import controller_operations.llm") →
-          LLM_MODEL=qwen/qwen3.8-27b, LLM_MAX_TOKENS=400,
-          LLM_REASONING_EFFORT=none
-          backend/scripts/testdb.sh up → throwaway Postgres started
-          (cd backend && .venv/bin/pytest -q) → 102 passed in 4.62s
-          (cd frontend && npm test) → 6 passed in 1.05s
-          (cd frontend && npm run lint) → clean, no output
-          (cd frontend && npm run build) → built in 119ms
-          backend/scripts/testdb.sh down → stopped and removed
-          `max_tokens` confirmed a real named parameter of the installed SDK at
-          backend/.venv/.../openai/resources/chat/completions/completions.py:97,
-          not written from memory.
-          NOT verified: any live Groq call from this tree, on either the model
-          or the 400 cap. The 400 evidence comes from the 2026-09-16 research
-          run, not from this tree.
-          <typecheck> has no command and <lint> is frontend-only, so on this
-          backend change both are vacuous, not passing. Read for what they
-          would catch: one new `int(os.environ.get(...))` constant and one added
-          keyword argument. The keyword name matches the SDK signature, the
-          value is an `int` and never `None`, and no exception path changed.
+Gates:    Backend 137 passed, 1 skipped (the live-token gate; needs LLM_LIVE=1 and a key).
+          Frontend 17/17 passed across 3 files. Failing: none.
+Verified: backend/scripts/testdb.sh up -> throwaway database ready.
+          (cd backend && .venv/bin/pytest -q) -> 137 passed, 1 skipped in 4.95s.
+          (cd frontend && npm test) -> 17 passed (3 files).
+          (cd frontend && npm run lint) -> clean.
+          (cd frontend && npm run build) -> built in 114ms.
+          <typecheck> has no command. Backend typecheck and lint are vacuous, not passing.
+          Read the whole backend diff vs base for the classes of error a type checker
+          would catch: return arity of pick_move_with_llm and explain_move_with_llm,
+          insert_move's new keyword arguments, NULL context columns reaching
+          explain_move, optional usage in the analysis copy, and the mapped
+          llm_unavailable / llm_bad_response paths. No defect of those classes found.
+          Checked against the invariants: I1, I3, I5, I6, I12 and I13 all hold. No
+          product path reads llm_calls; every llm_calls_q call is an insert or update.
+          Manual browser test: run by the human against the dev servers below, passing.
+          Explain route smoke, no LLM call spent: wrong token -> 403 not_a_player,
+          no token -> 401 missing_token.
+
+          Dev servers started this session and possibly still running:
+            backend  127.0.0.1:5001, backend/application.py, DATABASE_URL overridden
+                     to the throwaway Postgres at 127.0.0.1:55432.
+            frontend localhost:5173, vite dev.
+          Stop them, then backend/scripts/testdb.sh down. Docker was not running on
+          this machine and nothing listened on 5432, so no development database was
+          touched and none was changed. Apply backend/schema.sql to a real development
+          database before running this code against one.
+
+          Nothing is committed. No commit, push, tag or dependency change was made.
