@@ -12,7 +12,7 @@ import urllib.error
 import chess
 import psycopg
 
-from controller_operations.engine import evaluate, rank_moves
+from controller_operations.engine import evaluate, make_move_normalizer, rank_moves
 from controller_operations.errors import ApiError
 from controller_operations.helpers import (
     START_FEN,
@@ -277,6 +277,7 @@ def say_move(db, socketio, sid, text, token):
             )
             raise ApiError("no_legal_moves", 409)
         all_legal_ucis = {m.uci() for m in board.legal_moves}
+        normalize_move = make_move_normalizer(board)
 
         if prior_row:
             last_move = (prior_row["uci"], prior_row["san"])
@@ -319,6 +320,7 @@ def say_move(db, socketio, sid, text, token):
                     valid_ucis=all_legal_ucis,
                     on_retry=_on_llm_retry,
                     log=call_log,
+                    normalize=normalize_move,
                 )
             except (urllib.error.URLError, TimeoutError) as e:
                 logger.exception("say_move: llm_unavailable sid=%s", sid)

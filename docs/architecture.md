@@ -216,13 +216,13 @@ Same lock and ownership checks, then:
 
 1. **Alternation guard** — reads the last move; if the same side made it, reject with
    `waiting_for_opponent_move`. With no prior moves, only White may proceed.
-2. **Candidates** — `rank_moves` (`engine.py:88`) converts the FEN into a Sunfish
+2. **Candidates** — `rank_moves` (`engine.py:110`) converts the FEN into a Sunfish
    `Position`, scores every legal move with `pos.value(move)`, and returns the top 8
    as `(uci, san)` pairs. No search — piece-square deltas and capture bonuses only,
    well under a millisecond. On any Sunfish failure it falls back to the first 8
    legal moves; positions with ≤8 legal moves skip ranking entirely.
 3. **Broadcast `thinking`** so the opponent sees dots while the model works.
-4. **LLM** — `pick_move_with_llm` (`llm.py:281`) renders its two messages with
+4. **LLM** — `pick_move_with_llm` (`llm.py:282`) renders its two messages with
    `build_move_prompt` (`llm.py:145`) and hands them to the shared provider loop
    `_pick_move_from_messages` (`llm.py:169`). The user message is one compact JSON
    object with the keys `TONE`, `LAST`, `MSG`, `FEN`, `CAND`, `RULE` — the prior
@@ -236,7 +236,9 @@ Same lock and ownership checks, then:
    the 8 candidates. The candidate list is advisory by design: the prompt's `RULE`
    key says "choose CAND; leave it only if none fits MSG; tone_summary nonempty,"
    which lets the model play a deliberately off-beat move when the tone calls for
-   it while keeping the default sound.
+   it while keeping the default sound. Before this check, `make_move_normalizer`
+   (`engine.py:15`) turns the written move into one canonical UCI against the
+   current board.
 6. **Retry and classify** — bad JSON, a missing key, an out-of-set UCI, or a
    response with no usable content retries up to `LLM_MAX_RETRIES` (capped at 3)
    with `LLM_BACKOFF_BASE * 2**attempt` backoff, emitting `status: "retrying"`
@@ -313,7 +315,7 @@ ORDER BY status_code;
 
 ### Evaluation
 
-`evaluate` (`engine.py:67`) sums Sunfish piece-square values, negating when Black is
+`evaluate` (`engine.py:89`) sums Sunfish piece-square values, negating when Black is
 to move so the result is always centipawns from White's POV. It rides along on every
 `move` payload and on `GET /sessions/<sid>`. `EvalBar.jsx` clamps to ±1000cp and
 renders the split as two stacked fills. Parse failures return 0 rather than raising.

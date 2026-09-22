@@ -168,7 +168,7 @@ def build_move_prompt(
 
 def _pick_move_from_messages(
     system, user, candidates, valid_ucis, on_retry=None, log=None,
-    client=None, sleeper=None,
+    normalize=None, client=None, sleeper=None,
 ):
     """Run the shared provider, validation, retry, and logging loop."""
     client = client or _client
@@ -203,10 +203,11 @@ def _pick_move_from_messages(
             if content is None:
                 raise _BadShapeError("llm response contained no message content")
             parsed = json.loads(content)
-            uci = (parsed.get("uci") or "").strip()
+            raw = parsed.get("uci") or ""
+            uci = normalize(raw) if normalize is not None else raw.strip()
             tone_summary = (parsed.get("tone_summary") or "").strip()
-            if uci not in valid_ucis:
-                raise ValueError(f"llm returned invalid uci: {uci!r}")
+            if uci is None or uci not in valid_ucis:
+                raise ValueError(f"llm returned invalid uci: {raw!r}")
             off_list = uci not in {candidate for candidate, _ in candidates}
             if log is not None:
                 log.add_attempt(
@@ -280,7 +281,7 @@ def _pick_move_from_messages(
 
 def pick_move_with_llm(
     text, fen, candidates, prior_tone_summary="", last_move=None, valid_ucis=None,
-    on_retry=None, log=None, _client_override=None, _sleeper=None,
+    on_retry=None, log=None, normalize=None, _client_override=None, _sleeper=None,
 ):
     """Ask Groq to pick a UCI and emit an updated tone summary.
 
@@ -289,6 +290,8 @@ def pick_move_with_llm(
     valid_ucis: set of UCIs the LLM's chosen move must belong to. Defaults to
         just the candidate set (strict). Pass a wider set (e.g. all legal
         moves) to make the candidate list advisory rather than binding.
+    normalize: optional callable that receives the raw `uci` JSON value and
+        returns a canonical UCI or None. `valid_ucis` is checked afterward.
     prior_tone_summary: rolling summary of the game's tone so far (may be "").
     last_move: (uci, san) of the most recent move played, or None.
     Returns (uci, tone_summary). Retries on bad JSON or
@@ -301,7 +304,7 @@ def pick_move_with_llm(
     )
     return _pick_move_from_messages(
         system, user, candidates, valid_ucis, on_retry=on_retry, log=log,
-        client=_client_override, sleeper=_sleeper,
+        normalize=normalize, client=_client_override, sleeper=_sleeper,
     )
 
 

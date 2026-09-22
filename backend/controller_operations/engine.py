@@ -12,6 +12,28 @@ from vendor import sunfish
 ENGINE_TOPN_DEFAULT = 8
 
 
+def make_move_normalizer(board):
+    """Return a quiet converter from written chess notation to canonical UCI."""
+    def normalize(raw):
+        if not isinstance(raw, str):
+            return None
+
+        cleaned = raw.strip().rstrip("!?").rstrip()
+        if not cleaned:
+            return None
+
+        try:
+            move = board.parse_san(cleaned)
+        except ValueError:
+            return None
+
+        if move == chess.Move.null():
+            return None
+        return move.uci()
+
+    return normalize
+
+
 def _fen_to_sunfish_pos(fen):
     """Build a Sunfish Position from a FEN, oriented for the side to move."""
     board_part, turn, _castling, ep_str, _hm, _fm = fen.split()
